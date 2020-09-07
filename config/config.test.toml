@@ -1,0 +1,13 @@
+[graph]
+begin = 2
+commit = 2
+rollback = 2
+select = 3
+select-for-update = 3
+insert = 5
+update = 5
+delete = 5
+
+[depend]
+ww = 1
+wr = 1
