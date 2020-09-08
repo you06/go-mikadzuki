@@ -8,6 +8,9 @@ import (
 
 const MAX_RETRY = 10
 
+// Graph is the dependencies graph
+// all the timelines should begin with `Begin` and end with `Commit` or `Rollback`
+// the first transaction from each timeline should not depend on others
 type Graph struct {
 	allocID    int
 	timelines  []Timeline
@@ -37,17 +40,6 @@ func (g *Graph) GetTimeline(n int) *Timeline {
 }
 
 func (g *Graph) AddDependency(dependTp DependTp) error {
-	for i := 0; i < MAX_RETRY; i++ {
-		if err := g.TryAddDependency(dependTp); err != nil && i == MAX_RETRY-1 {
-			return errors.Trace(err)
-		} else {
-			return nil
-		}
-	}
-	panic("unreachable")
-}
-
-func (g *Graph) TryAddDependency(dependTp DependTp) error {
 	ts := len(g.timelines)
 	if ts == 1 {
 		return errors.New("connot connect between 1 timeline")
@@ -69,11 +61,15 @@ func (g *Graph) TryAddDependency(dependTp DependTp) error {
 			t2 = rand.Intn(ts)
 		}
 		a1 = rand.Intn(len(g.timelines[t1].actions))
+		actions1 = g.GetTransaction(t1, a1)
 		a2 = rand.Intn(len(g.timelines[t2].actions))
+		actions2 = g.GetTransaction(t2, a2)
+		for actions2[0].id == 0 {
+			a2 = rand.Intn(len(g.timelines[t2].actions))
+			actions2 = g.GetTransaction(t2, a2)
+		}
 		if dependTp.CheckValidFrom(g.timelines[t1].actions[a1].tp) &&
 			dependTp.CheckValidTo(g.timelines[t2].actions[a2].tp) {
-			actions1 = g.GetTransaction(t1, a1)
-			actions2 = g.GetTransaction(t2, a2)
 			if dependTp.CheckValidLastFrom(actions1[len(actions1)-1].tp) &&
 				dependTp.CheckValidLastTo(actions2[len(actions2)-1].tp) {
 				action1 = dependTp.GetActionFrom(actions1)
@@ -153,6 +149,12 @@ func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
 func (g *Graph) ConnectTxnDepend(t1, a1, t2, a2 int, tp DependTp) {
 	from := g.GetTimeline(t1).GetAction(a1)
 	to := g.GetTimeline(t2).GetAction(a2)
+	// avoid adding duplicated dependency
+	for _, out := range from.outs {
+		if out.tID == t2 && out.aID == a2 && out.tp == tp {
+			return
+		}
+	}
 	from.outs = append(from.outs, Depend{
 		tID: t2,
 		aID: a2,
@@ -179,3 +181,21 @@ func (g *Graph) ConnectValueDepend(t1, a1, t2, a2 int, tp DependTp) {
 		tp:  tp,
 	})
 }
+
+func (g *Graph) countNoDependAction() int {
+	cnt := 0
+	for _, timeline := range g.timelines {
+		for _, action := range timeline.actions {
+			if action.tp != Begin &&
+				action.tp != Commit &&
+				action.tp != Rollback {
+				if len(action.vIns) == 0 {
+					cnt += 1
+				}
+			}
+		}
+	}
+	return cnt
+}
+
+func (g *Graph) MakeLinearKV() {}

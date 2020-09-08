@@ -11,3 +11,4 @@ delete = 50
 [depend]
 ww = 10
 wr = 10
+rw = 10

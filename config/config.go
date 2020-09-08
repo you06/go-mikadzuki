@@ -6,12 +6,14 @@ import (
 )
 
 type Config struct {
+	Global Global `toml:global`
 	Graph  Graph  `toml:"graph"`
 	Depend Depend `toml:"depend"`
 }
 
 func NewConfig() Config {
 	return Config{
+		Global: NewGlobal(),
 		Graph:  NewGraph(),
 		Depend: NewDepend(),
 	}

@@ -69,22 +69,29 @@ func NewAction(id int, tp ActionTp) Action {
 	}
 }
 
+func (a ActionTp) IsRead() bool {
+	if a == Select ||
+		a == SelectForUpdate {
+		return true
+	}
+	return false
+}
+
+func (a ActionTp) IsWrite() bool {
+	if a == Insert ||
+		a == Update ||
+		a == Delete {
+		return true
+	}
+	return false
+}
+
 func (d DependTp) CheckValidFrom(tp ActionTp) bool {
 	switch d {
 	case RW:
-		switch tp {
-		case Select, SelectForUpdate:
-			return true
-		default:
-			return false
-		}
+		return tp.IsRead()
 	case WW, WR:
-		switch tp {
-		case Insert, Update, Delete:
-			return true
-		default:
-			return false
-		}
+		return tp.IsWrite()
 	default:
 		panic("unreachable")
 	}
@@ -118,19 +125,9 @@ func (d DependTp) GetActionFrom(actions []Action) Action {
 func (d DependTp) CheckValidTo(tp ActionTp) bool {
 	switch d {
 	case WR:
-		switch tp {
-		case Select, SelectForUpdate:
-			return true
-		default:
-			return false
-		}
+		return tp.IsRead()
 	case RW, WW:
-		switch tp {
-		case Insert, Update, Delete:
-			return true
-		default:
-			return false
-		}
+		return tp.IsWrite()
 	default:
 		panic("unreachable")
 	}

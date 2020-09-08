@@ -5,12 +5,14 @@ import "reflect"
 type Depend struct {
 	WW int `toml:"ww"`
 	WR int `toml:"wr"`
+	RW int `toml:"rw"`
 }
 
 func NewDepend() Depend {
 	return Depend{
 		WW: 10,
 		WR: 10,
+		RW: 10,
 	}
 }
 

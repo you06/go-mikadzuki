@@ -7,6 +7,7 @@ import (
 )
 
 type Generator struct {
+	globalConfig *config.Global
 	graphConfig  *config.Graph
 	dependConfig *config.Depend
 	graphMap     map[ActionTp]int
@@ -15,8 +16,9 @@ type Generator struct {
 	dependSum    int
 }
 
-func NewGenerator(graph *config.Graph, depend *config.Depend) Generator {
+func NewGenerator(global *config.Global, graph *config.Graph, depend *config.Depend) Generator {
 	generator := Generator{
+		globalConfig: global,
 		graphConfig:  graph,
 		dependConfig: depend,
 		graphSum:     0,
@@ -69,7 +71,7 @@ func (g *Generator) randDependTp() DependTp {
 	panic("unreachable")
 }
 
-func (g *Generator) NewGraph(conn, length, edge int) Graph {
+func (g *Generator) NewGraph(conn, length int) Graph {
 	graph := NewGraph()
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
@@ -84,7 +86,9 @@ func (g *Generator) NewGraph(conn, length, edge int) Graph {
 			}
 		}
 	}
-	for i := 0; i < edge; i++ {
+	noDepend := graph.countNoDependAction()
+	connectCnt := int(float64(noDepend) * g.globalConfig.DependRatio / 2)
+	for i := 0; i < connectCnt; i++ {
 		_ = graph.AddDependency(g.randDependTp())
 	}
 	return graph
