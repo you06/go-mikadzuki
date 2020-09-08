@@ -1,0 +1,13 @@
+[graph]
+begin = 20
+commit = 20
+rollback = 20
+select = 30
+select-for-update = 30
+insert = 50
+update = 50
+delete = 50
+
+[depend]
+ww = 10
+wr = 10

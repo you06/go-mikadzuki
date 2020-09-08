@@ -6,7 +6,7 @@ VERSION   := $(if $(VERSION),$(VERSION),latest)
 PACKAGES := go list ./...| grep -vE 'vendor'
 PACKAGE_DIRECTORIES := $(PACKAGES) | sed 's|github.com/you06/go-mikadzuki/||'
 
-LDFLAGS += -X "github.com/you06/go-mikadzuki/util.BuildTS=$(shell date -u '+%Y-%m-%d %I:%M:%S')"
+LDFLAGS += -X "github.com/you06/go-mikadzuki/util.BuildTS=$(shell date -u '+%Y-%m-%d %I:%M:%S %:z')"
 LDFLAGS += -X "github.com/you06/go-mikadzuki/util.BuildHash=$(shell git rev-parse HEAD)"
 
 GOBUILD=$(GO) build -ldflags '$(LDFLAGS)'
@@ -16,4 +16,7 @@ default: build
 build:
 	$(GOBUILD) $(GOMOD) -o bin/mikadzuki cmd/*.go
 
-.PHONY: build
+test:
+	$(GOTEST) $$($(PACKAGES))
+
+.PHONY: build test
