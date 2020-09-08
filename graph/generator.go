@@ -74,11 +74,18 @@ func (g *Generator) NewGraph(conn, length, edge int) Graph {
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
 		for j := 0; j < length; j++ {
-			timeline.NewACtionWithTp(g.randActionTp())
+			// start from begin and stop as commit
+			if j == 0 {
+				timeline.NewACtionWithTp(Begin)
+			} else if j == length-1 {
+				timeline.NewACtionWithTp(Commit)
+			} else {
+				timeline.NewACtionWithTp(g.randActionTp())
+			}
 		}
 	}
 	for i := 0; i < edge; i++ {
-
+		_ = graph.AddDependency(g.randDependTp())
 	}
 	return graph
 }

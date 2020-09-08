@@ -20,14 +20,14 @@ func (t *Timeline) NewACtionWithTp(actionTp ActionTp) *Action {
 	if id > 0 {
 		before := id - 1
 		t.actions[before].outs = append(t.actions[before].outs, Depend{
-			from: before,
-			to:   t.allocID,
-			tp:   Realtime,
+			tID: t.id,
+			aID: id,
+			tp:  Realtime,
 		})
 		action.ins = append(action.ins, Depend{
-			from: t.allocID,
-			to:   before,
-			tp:   Realtime,
+			tID: t.id,
+			aID: before,
+			tp:  Realtime,
 		})
 	}
 	t.allocID += 1
