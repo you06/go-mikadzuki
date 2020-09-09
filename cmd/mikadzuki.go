@@ -14,6 +14,9 @@ var rootCmd = &cobra.Command{
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
 		util.PrintVersion()
+		fmt.Println(util.RdRange(-9223372036854775808, 9223372036854775807))
+		fmt.Println(util.RdRange(0, 9223372036854775807))
+		fmt.Println(util.RdName())
 	},
 }
 

@@ -7,31 +7,37 @@ import (
 type Manager struct {
 	global  *config.Global
 	allocID int
-	kvs     []LinearKV
+	schemas []Schema
 }
 
 func NewManager(global *config.Global) Manager {
 	return Manager{
 		global:  global,
 		allocID: 0,
-		kvs:     []LinearKV{},
+		schemas: []Schema{},
 	}
 }
 
 func (m *Manager) Reset() {
 	m.allocID = 0
-	m.kvs = []LinearKV{}
+	m.schemas = []Schema{}
 }
 
-func (m *Manager) NewLinearKV() *LinearKV {
+func (m *Manager) NewSchema() *Schema {
 	id := m.allocID
-	linearKV := LinearKV{
-		SchemaID:  id,
-		Columns:   []Column{},
-		Snapshots: []Snapshot{},
-		Primary:   []int{},
-		Unique:    [][]int{},
+	schema := Schema{
+		SchemaID:   id,
+		Columns:    []Column{},
+		Primary:    []int{},
+		Unique:     [][]int{},
+		PrimarySet: make(map[string]struct{}),
+		UniqueSet:  []map[string]struct{}{},
+		AllocKID:   0,
+		AllocVID:   0,
+		KVs:        []KV{},
+		VID2KID:    make(map[int]int),
+		Data:       [][]interface{}{},
 	}
-	m.kvs = append(m.kvs, linearKV)
-	return &m.kvs[id]
+	m.schemas = append(m.schemas, schema)
+	return &m.schemas[id]
 }

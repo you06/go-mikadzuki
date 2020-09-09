@@ -7,7 +7,7 @@ import (
 )
 
 func TestCreateTimeline(t *testing.T) {
-	graph := NewGraph()
+	graph := NewGraph(nil)
 	timeline := graph.NewTimeline()
 	timeline.NewACtionWithTp(Begin)
 	timeline.NewACtionWithTp(Commit)

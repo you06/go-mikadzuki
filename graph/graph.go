@@ -4,6 +4,7 @@ import (
 	"math/rand"
 
 	"github.com/juju/errors"
+	"github.com/you06/go-mikadzuki/kv"
 )
 
 const MAX_RETRY = 10
@@ -15,13 +16,15 @@ type Graph struct {
 	allocID    int
 	timelines  []Timeline
 	dependency int
+	kvManager  *kv.Manager
 }
 
-func NewGraph() Graph {
+func NewGraph(kvManager *kv.Manager) Graph {
 	return Graph{
 		allocID:    0,
 		timelines:  []Timeline{},
 		dependency: 0,
+		kvManager:  kvManager,
 	}
 }
 
@@ -198,4 +201,24 @@ func (g *Graph) countNoDependAction() int {
 	return cnt
 }
 
-func (g *Graph) MakeLinearKV() {}
+func (g *Graph) MakeLinearKV() {
+	for i := 0; i < len(g.timelines); i++ {
+		timeline := g.GetTimeline(i)
+		j := 0
+		for {
+			action := timeline.GetAction(j)
+			if action.tp == Commit || action.tp == Rollback {
+				break
+			}
+			if action.tp.IsWrite() {
+				// action.kvs = append(action.kvs, KV{
+				// 	k: kIndex,
+				// 	v: vIndex,
+				// })
+				// kIndex += 1
+				// vIndex += 1
+			}
+		}
+
+	}
+}

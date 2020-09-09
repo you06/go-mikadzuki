@@ -4,6 +4,7 @@ import (
 	"math/rand"
 
 	"github.com/you06/go-mikadzuki/config"
+	"github.com/you06/go-mikadzuki/kv"
 )
 
 type Generator struct {
@@ -14,15 +15,17 @@ type Generator struct {
 	graphSum     int
 	dependMap    map[DependTp]int
 	dependSum    int
+	kvManager    *kv.Manager
 }
 
-func NewGenerator(global *config.Global, graph *config.Graph, depend *config.Depend) Generator {
+func NewGenerator(kvManager *kv.Manager, global *config.Global, graph *config.Graph, depend *config.Depend) Generator {
 	generator := Generator{
 		globalConfig: global,
 		graphConfig:  graph,
 		dependConfig: depend,
 		graphSum:     0,
 		dependSum:    0,
+		kvManager:    kvManager,
 	}
 	return generator
 }
@@ -72,7 +75,8 @@ func (g *Generator) randDependTp() DependTp {
 }
 
 func (g *Generator) NewGraph(conn, length int) Graph {
-	graph := NewGraph()
+	g.kvManager.Reset()
+	graph := NewGraph(g.kvManager)
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
 		for j := 0; j < length; j++ {
@@ -91,5 +95,6 @@ func (g *Generator) NewGraph(conn, length int) Graph {
 	for i := 0; i < connectCnt; i++ {
 		_ = graph.AddDependency(g.randDependTp())
 	}
+	graph.MakeLinearKV()
 	return graph
 }

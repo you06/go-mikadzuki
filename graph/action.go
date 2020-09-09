@@ -1,5 +1,7 @@
 package graph
 
+import "github.com/you06/go-mikadzuki/kv"
+
 type Action struct {
 	id int
 	tp ActionTp
@@ -11,6 +13,7 @@ type Action struct {
 	// which should only exist in DML actions
 	vOuts []Depend
 	vIns  []Depend
+	kvs   []kv.KV
 }
 
 type ActionTp string
