@@ -116,6 +116,8 @@ func (s *Schema) CreateTable() string {
 	return b.String()
 }
 
+// NewKV only declear the key but the value may be none
+// when the value is none, read it will get empty value
 func (s *Schema) NewKV() *KV {
 	id := s.AllocKID
 	kv := NewKV(id)
@@ -124,6 +126,7 @@ func (s *Schema) NewKV() *KV {
 	return &s.KVs[id]
 }
 
+// NewValue create value for a given key (Insert operation)
 func (s *Schema) NewValue(kID int) int {
 	id := s.AllocVID
 	s.AllocVID += 1
@@ -132,12 +135,20 @@ func (s *Schema) NewValue(kID int) int {
 	return id
 }
 
+// PutValue update value for a given key (Update operation)
 func (s *Schema) PutValue(kID int) int {
 	id := s.AllocVID
 	s.AllocVID += 1
 	s.VID2KID[id] = kID
 	s.UpdateValue(id)
 	return id
+}
+
+// DelValue delete value for a given key (Delete operation)
+func (s *Schema) DelValue(kID int) {
+	// complete me
+	// delete value id from kv
+	// delete index
 }
 
 func (s *Schema) IfKeyDuplicated(value []interface{}, primaryKey *[]string, uniqueKeys *[][]string) bool {
@@ -192,6 +203,11 @@ func (s *Schema) CreateValue(vID int) {
 	s.Data = append(s.Data, value)
 }
 
+// there can be difference when updating value
+// 1. update a non-index column is easy, it won't make any changes
+// 2. update a unique-index would may cause some complex problem
+// if a WW dependency is caused by a replace into, this kv will split
+// 3. update primary key is similar to unique-index, but it may cause further influence
 func (s *Schema) UpdateValue(vID int) {
 
 }

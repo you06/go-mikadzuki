@@ -27,6 +27,8 @@ func NewGenerator(kvManager *kv.Manager, global *config.Global, graph *config.Gr
 		dependSum:    0,
 		kvManager:    kvManager,
 	}
+	generator.CalcGraphSum()
+	generator.CalcDependSum()
 	return generator
 }
 
@@ -79,6 +81,7 @@ func (g *Generator) NewGraph(conn, length int) Graph {
 	graph := NewGraph(g.kvManager)
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
+		var before ActionTp
 		for j := 0; j < length; j++ {
 			// start from begin and stop as commit
 			if j == 0 {
@@ -86,7 +89,12 @@ func (g *Generator) NewGraph(conn, length int) Graph {
 			} else if j == length-1 {
 				timeline.NewACtionWithTp(Commit)
 			} else {
-				timeline.NewACtionWithTp(g.randActionTp())
+				tp := g.randActionTp()
+				if before == Commit || before == Rollback {
+					tp = Begin
+				}
+				timeline.NewACtionWithTp(tp)
+				before = tp
 			}
 		}
 	}

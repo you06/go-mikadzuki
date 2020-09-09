@@ -1,7 +1,5 @@
 package graph
 
-import "github.com/you06/go-mikadzuki/kv"
-
 type Action struct {
 	id int
 	tp ActionTp
@@ -13,7 +11,12 @@ type Action struct {
 	// which should only exist in DML actions
 	vOuts []Depend
 	vIns  []Depend
-	kvs   []kv.KV
+	// key id, when it's -1, it means the key is not specified yet
+	kID int
+	// value id, can find out value from kv.Schema
+	// when the value id is -1, it means the value is None
+	// missing Option generic type
+	vID int
 }
 
 type ActionTp string

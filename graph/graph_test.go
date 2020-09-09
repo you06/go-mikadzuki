@@ -4,10 +4,12 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"github.com/you06/go-mikadzuki/kv"
 )
 
 func TestCreateTimeline(t *testing.T) {
-	graph := NewGraph(nil)
+	manager := kv.NewManager(nil)
+	graph := NewGraph(&manager)
 	timeline := graph.NewTimeline()
 	timeline.NewACtionWithTp(Begin)
 	timeline.NewACtionWithTp(Commit)

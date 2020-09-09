@@ -16,7 +16,7 @@ type Graph struct {
 	allocID    int
 	timelines  []Timeline
 	dependency int
-	kvManager  *kv.Manager
+	schema     *kv.Schema
 }
 
 func NewGraph(kvManager *kv.Manager) Graph {
@@ -24,7 +24,7 @@ func NewGraph(kvManager *kv.Manager) Graph {
 		allocID:    0,
 		timelines:  []Timeline{},
 		dependency: 0,
-		kvManager:  kvManager,
+		schema:     kvManager.NewSchema(),
 	}
 }
 
@@ -202,23 +202,93 @@ func (g *Graph) countNoDependAction() int {
 }
 
 func (g *Graph) MakeLinearKV() {
-	for i := 0; i < len(g.timelines); i++ {
+	ts := len(g.timelines)
+	progress := make([]int, ts)
+	// initKVs for quick get Realtime dependent KV
+	initKVs := make([]*kv.KV, ts)
+	for i := 0; i < ts; i++ {
+		initKVs[i] = g.schema.NewKV()
+	}
+	// init values for first transactions
+	for i := 0; i < ts; i++ {
 		timeline := g.GetTimeline(i)
-		j := 0
+		kv := initKVs[i]
+		progress[i] = 0
 		for {
-			action := timeline.GetAction(j)
+			action := timeline.GetAction(progress[i])
 			if action.tp == Commit || action.tp == Rollback {
 				break
 			}
 			if action.tp.IsWrite() {
-				// action.kvs = append(action.kvs, KV{
-				// 	k: kIndex,
-				// 	v: vIndex,
-				// })
-				// kIndex += 1
-				// vIndex += 1
+				action.kID = kv.ID
+				switch action.tp {
+				case Insert:
+					if kv.Latest != -1 {
+						kv = g.schema.NewKV()
+					}
+					kv.NewValue(g.schema)
+					action.vID = kv.Latest
+				case Update:
+					kv.PutValue(g.schema)
+					action.vID = kv.Latest
+				case Delete:
+					kv.DelValue(g.schema)
+					action.vID = kv.Latest
+				}
+			} else if action.tp.IsRead() {
+				action.kID = kv.ID
+				action.vID = kv.Latest
+			}
+			progress[i] += 1
+		}
+	}
+
+	for i := 0; i < ts; i++ {
+		origin := progress[i]
+		timeline := g.GetTimeline(i)
+		progress[i] += 1
+		deferCalc := false
+		kv := initKVs[i]
+		for {
+			action := timeline.GetAction(progress[i])
+			if len(action.vIns) > 0 {
+				before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
+				if before.kID == -1 {
+					deferCalc = true
+					break
+				}
+				if action.tp.IsRead() {
+					action.vID = g.schema.KVs[before.kID].Latest
+				} else if action.tp.IsWrite() {
+					g.schema.KVs[before.kID].PutValue(g.schema)
+				} else {
+					panic("unreachable")
+				}
+			} else {
+				if action.tp.IsRead() {
+					action.kID = kv.ID
+					action.vID = kv.Latest
+				} else if action.tp.IsWrite() {
+					switch action.tp {
+					case Insert:
+						kv = g.schema.NewKV()
+						kv.NewValue(g.schema)
+						action.kID = kv.ID
+						action.vID = kv.Latest
+					case Update:
+						kv.PutValue(g.schema)
+						action.vID = kv.Latest
+					case Delete:
+						kv.DelValue(g.schema)
+						action.vID = kv.Latest
+					}
+				}
 			}
 		}
-
+		// reset the process and get value later
+		// the value already set will be overwritten
+		if deferCalc {
+			progress[i] = origin
+		}
 	}
 }
