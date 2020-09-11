@@ -1,6 +1,6 @@
 # Graph
 
-This document describe graph and the dependency deduction of it.
+This document describes graph and the dependency deduction of it.
 
 ## Graph samples
 
@@ -40,7 +40,9 @@ As we can change the write and expected read values in graph generated phase, we
 
 In this process, the difference of isolation levels between databases must be considered.
 
-As the transaction is atomic, it can be tweat as a whole
+As the transaction is atomic, it should be treating as a whole, the following cases:
+
+This is a value dependency graph, there is a cycle in it, but we cannot infer that this transaction is invalid. Let `t2` start before `t1`'s commit then read action can get the old value.
 
 ```text
 r(1, 1)
@@ -52,6 +54,8 @@ t1: begin -> w(1, 2) -> w(2, 2) -> commit
                 ↓         |
 t2: begin -> w(2, 3) -> r(1, 1) -> commit
 ```
+
+To change a value dependency graph into a transaction dependency graph, we make `WW` between commit actions and `RW` between begin and commit. Then we can infer that the transactions are valid.
 
 ```text
 r(1, 1)

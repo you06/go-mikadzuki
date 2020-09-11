@@ -48,6 +48,7 @@ var (
 		KVs:      []KV{},
 		Data: [][]interface{}{
 			{17, "kaeru", "2020-08-31"},
+			{18, "kaeru", "1919-08-10"},
 		},
 	}
 )
@@ -83,4 +84,27 @@ func TestIfKeyDuplicated(t *testing.T) {
 	require.False(t, schema.IfKeyDuplicated(value, &primaryKey, &uniqueKeys))
 	schema.AddPrimaryKey(primaryKey)
 	require.True(t, schema.IfKeyDuplicated(value, &primaryKey, &uniqueKeys))
+}
+
+func TestSelectSQL(t *testing.T) {
+	selectSQL := schema.SelectSQL(0)
+	require.True(t, selectSQL == `SELECT * FROM t1 WHERE id=17 AND val="kaeru"` ||
+		selectSQL == `SELECT * FROM t1 WHERE val="kaeru" AND k="2020-08-31"`)
+}
+
+func TestUpdateSQL(t *testing.T) {
+	updateSQL := schema.UpdateSQL(0, 1)
+	require.True(t, updateSQL == `UPDATE t1 SET id=18, k="1919-08-10" WHERE id=17 AND val="kaeru"` ||
+		updateSQL == `UPDATE t1 SET id=18, k="1919-08-10" WHERE val="kaeru" AND k="2020-08-31"`)
+}
+
+func TestDeleteSQL(t *testing.T) {
+	deleteSQL := schema.DeleteSQL(0)
+	require.True(t, deleteSQL == `DELETE FROM t1 WHERE id=17 AND val="kaeru"` ||
+		deleteSQL == `DELETE FROM t1 WHERE val="kaeru" AND k="2020-08-31"`)
+}
+
+func TestInsertSQL(t *testing.T) {
+	insertSQL := schema.InsertSQL(1)
+	require.Equal(t, insertSQL, `INSERT INTO t1 VALUES(18, "kaeru", "1919-08-10")`)
 }

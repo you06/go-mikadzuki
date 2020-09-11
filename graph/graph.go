@@ -233,19 +233,21 @@ func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) bool {
 		txns.Push(txn)
 	} else if action.tp.IsWrite() {
 		action.knowValue = true
+		var sql string
 		switch action.tp {
 		case Insert:
 			// may use the old index value to make it a real dependency
 			kv := g.schema.NewKV()
 			txn = kv.Begin()
-			txn.NewValue(g.schema)
+			sql = txn.NewValue(g.schema)
 		case Update:
-			txn.PutValue(g.schema)
+			sql = txn.PutValue(g.schema)
 		case Delete:
-			txn.DelValue(g.schema)
+			sql = txn.DelValue(g.schema)
 		}
 		action.kID = txn.KID
 		action.vID = txn.Latest
+		action.SQL = sql
 		txns.Push(txn)
 	} else {
 		panic("unreachable")
@@ -284,15 +286,15 @@ func (g *Graph) MakeLinearKV() {
 					if txn.Latest != kv.NULL_VALUE_ID {
 						txn = g.schema.NewKV().Begin()
 					}
-					txn.NewValue(g.schema)
+					action.SQL = txn.NewValue(g.schema)
 					action.kID = txn.KID
 					action.vID = txn.Latest
 				case Update:
-					txn.PutValue(g.schema)
+					action.SQL = txn.PutValue(g.schema)
 					action.kID = txn.KID
 					action.vID = txn.Latest
 				case Delete:
-					txn.DelValue(g.schema)
+					action.SQL = txn.DelValue(g.schema)
 					action.kID = txn.KID
 					action.vID = txn.Latest
 				}
@@ -321,7 +323,7 @@ func (g *Graph) MakeLinearKV() {
 			if t, ok := txnsStore[i]; ok {
 				txns = *t
 			} else {
-				txns = kv.Txns([]*kv.Txn{initKVs[i].Begin()})
+				txns = []*kv.Txn{initKVs[i].Begin()}
 				txnsStore[i] = &txns
 			}
 			if len(waitActions[i]) != 0 {
@@ -368,14 +370,14 @@ func (g *Graph) MakeLinearKV() {
 							kv := g.schema.NewKV()
 							txn = kv.Begin()
 							txns.Push(txn)
-							txn.NewValue(g.schema)
+							action.SQL = txn.NewValue(g.schema)
 							action.kID = txn.KID
 							action.vID = txn.Latest
 						case Update:
-							txn.PutValue(g.schema)
+							action.SQL = txn.PutValue(g.schema)
 							action.vID = txn.Latest
 						case Delete:
-							txn.DelValue(g.schema)
+							action.SQL = txn.DelValue(g.schema)
 							action.vID = txn.Latest
 						}
 					}
@@ -389,6 +391,23 @@ func (g *Graph) MakeLinearKV() {
 		}
 		if done {
 			break
+		}
+	}
+
+	// generate all select SQLs and check if there are invalid value ids
+	for i := 0; i < ts; i++ {
+		timeline := g.GetTimeline(i)
+		as := len(timeline.actions)
+		for j := 0; j < as; j++ {
+			action := timeline.GetAction(as)
+			if action.tp.IsWrite() {
+				util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
+			} else if action.tp.IsRead() {
+				switch action.tp {
+				case Select:
+					action.SQL = g.schema.SelectSQL(action.vID)
+				}
+			}
 		}
 	}
 }

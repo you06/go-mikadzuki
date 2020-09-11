@@ -41,7 +41,7 @@ type Column struct {
 func (s *Schema) AddColumn(mustPrimary bool) {
 	tp := RdType()
 	null := mustPrimary || util.RdBool()
-	primary := mustPrimary || false
+	primary := mustPrimary
 	if null && !mustPrimary {
 		primary = util.RdBoolRatio(PRIMARY_RATIO)
 	}
@@ -61,7 +61,7 @@ func (s *Schema) AddColumn(mustPrimary bool) {
 func (s *Schema) AddUnique() {
 	var unique []int
 	for i := 0; i < len(s.Columns); i++ {
-		if rand.Float64() < UNIQUE_RATIO {
+		if util.RdBoolRatio(UNIQUE_RATIO) {
 			unique = append(unique, i)
 		}
 	}
@@ -121,7 +121,7 @@ func (s *Schema) CreateTable() string {
 	return b.String()
 }
 
-// NewKV only declear the key but the value may be none
+// NewKV only declare the key but the value may be none
 // when the value is none, read it will get empty value
 func (s *Schema) NewKV() *KV {
 	id := s.AllocKID
@@ -156,7 +156,7 @@ func (s *Schema) DelValue(vID int) {
 
 func (s *Schema) IfKeyDuplicated(value []interface{}, primaryKey *[]string, uniqueKeys *[][]string) bool {
 	// if this value cause primary key duplicated, retry it
-	if _, ok := s.PrimarySet[strings.Join((*primaryKey), "-")]; ok {
+	if _, ok := s.PrimarySet[strings.Join(*primaryKey, "-")]; ok {
 		return true
 	}
 	for i := 0; i < len(s.Unique); i++ {
@@ -168,11 +168,11 @@ func (s *Schema) IfKeyDuplicated(value []interface{}, primaryKey *[]string, uniq
 }
 
 func (s *Schema) AddPrimaryKey(primaryKey []string) {
-	s.PrimarySet[strings.Join((primaryKey), "-")] = struct{}{}
+	s.PrimarySet[strings.Join(primaryKey, "-")] = struct{}{}
 }
 
 func (s *Schema) DelPrimaryKey(primaryKey []string) {
-	delete(s.PrimarySet, strings.Join((primaryKey), "-"))
+	delete(s.PrimarySet, strings.Join(primaryKey, "-"))
 }
 
 func (s *Schema) AddUniqueKeys(uniqueKeys [][]string) {
@@ -288,4 +288,90 @@ func (s *Schema) DeleteValue(vID int) {
 	s.MakeUniqueKey(s.Data[vID], &uniqueKeys)
 	s.DelPrimaryKey(primaryKey)
 	s.DelUniqueKeys(uniqueKeys)
+}
+
+func (s *Schema) SelectSQL(id int) string {
+	data := s.Data[id]
+	var b strings.Builder
+	fmt.Fprintf(&b, "SELECT * FROM %s WHERE ", s.TableName())
+	indexID := rand.Intn(1 + len(s.Unique))
+	var indexes []int
+	if indexID == 0 {
+		indexes = s.Primary
+	} else {
+		indexes = s.Unique[indexID-1]
+	}
+	for i, index := range indexes {
+		if i != 0 {
+			b.WriteString(" AND ")
+		}
+		fmt.Fprintf(&b, "%s=%s", s.Columns[index].Name, s.Columns[index].Tp.ValToString(data[index]))
+	}
+	return b.String()
+}
+
+func (s *Schema) UpdateSQL(oldID, newID int) string {
+	oldData, newData := s.Data[oldID], s.Data[newID]
+	var b strings.Builder
+	fmt.Fprintf(&b, "UPDATE %s SET ", s.TableName())
+
+	ds := len(s.Columns)
+	var patches []string
+	for i := 0; i < ds; i++ {
+		if oldData[i] != newData[i] {
+			patches = append(patches, fmt.Sprintf("%s=%s", s.Columns[i].Name, s.Columns[i].Tp.ValToString(newData[i])))
+		}
+	}
+	b.WriteString(strings.Join(patches, ", "))
+
+	b.WriteString(" WHERE ")
+
+	indexID := rand.Intn(1 + len(s.Unique))
+	var indexes []int
+	if indexID == 0 {
+		indexes = s.Primary
+	} else {
+		indexes = s.Unique[indexID-1]
+	}
+	for i, index := range indexes {
+		if i != 0 {
+			b.WriteString(" AND ")
+		}
+		fmt.Fprintf(&b, "%s=%s", s.Columns[index].Name, s.Columns[index].Tp.ValToString(oldData[index]))
+	}
+	return b.String()
+}
+
+func (s *Schema) DeleteSQL(id int) string {
+	data := s.Data[id]
+	var b strings.Builder
+	fmt.Fprintf(&b, "DELETE FROM %s WHERE ", s.TableName())
+	indexID := rand.Intn(1 + len(s.Unique))
+	var indexes []int
+	if indexID == 0 {
+		indexes = s.Primary
+	} else {
+		indexes = s.Unique[indexID-1]
+	}
+	for i, index := range indexes {
+		if i != 0 {
+			b.WriteString(" AND ")
+		}
+		fmt.Fprintf(&b, "%s=%s", s.Columns[index].Name, s.Columns[index].Tp.ValToString(data[index]))
+	}
+	return b.String()
+}
+
+func (s *Schema) InsertSQL(id int) string {
+	data := s.Data[id]
+	var b strings.Builder
+	fmt.Fprintf(&b, "INSERT INTO %s VALUES(", s.TableName())
+	for i, item := range data {
+		if i != 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(s.Columns[i].Tp.ValToString(item))
+	}
+	b.WriteString(")")
+	return b.String()
 }
