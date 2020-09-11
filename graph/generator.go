@@ -1,27 +1,35 @@
 package graph
 
 import (
+	"fmt"
 	"math/rand"
 
 	"github.com/you06/go-mikadzuki/config"
+	"github.com/you06/go-mikadzuki/kv"
 )
 
 type Generator struct {
+	globalConfig *config.Global
 	graphConfig  *config.Graph
 	dependConfig *config.Depend
 	graphMap     map[ActionTp]int
 	graphSum     int
 	dependMap    map[DependTp]int
 	dependSum    int
+	kvManager    *kv.Manager
 }
 
-func NewGenerator(graph *config.Graph, depend *config.Depend) Generator {
+func NewGenerator(kvManager *kv.Manager, global *config.Global, graph *config.Graph, depend *config.Depend) Generator {
 	generator := Generator{
+		globalConfig: global,
 		graphConfig:  graph,
 		dependConfig: depend,
 		graphSum:     0,
 		dependSum:    0,
+		kvManager:    kvManager,
 	}
+	generator.CalcGraphSum()
+	generator.CalcDependSum()
 	return generator
 }
 
@@ -69,23 +77,59 @@ func (g *Generator) randDependTp() DependTp {
 	panic("unreachable")
 }
 
-func (g *Generator) NewGraph(conn, length, edge int) Graph {
-	graph := NewGraph()
+func (g *Generator) NewGraph(conn, length int) Graph {
+	g.kvManager.Reset()
+	graph := NewGraph(g.kvManager)
+	fmt.Println("make graph")
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
+		var (
+			beforeTp ActionTp
+			tp       ActionTp
+		)
 		for j := 0; j < length; j++ {
 			// start from begin and stop as commit
 			if j == 0 {
-				timeline.NewACtionWithTp(Begin)
+				tp = Begin
 			} else if j == length-1 {
-				timeline.NewACtionWithTp(Commit)
+				if beforeTp == Commit || beforeTp == Rollback {
+					break
+				}
+				tp = Commit
 			} else {
-				timeline.NewACtionWithTp(g.randActionTp())
+				tp = Begin
+				if beforeTp != Commit && beforeTp != Rollback {
+					for tp == Begin {
+						tp = g.randActionTp()
+					}
+				}
+			}
+			timeline.NewACtionWithTp(tp)
+			beforeTp = tp
+		}
+	}
+	fmt.Println("make dependency")
+	// noDepend := graph.countNoDependAction()
+	// connectCnt := int(float64(noDepend) * g.globalConfig.DependRatio / 2)
+	failedCnt := 0
+OUTER:
+	for {
+		failedCnt = 0
+		for {
+			if err := graph.AddDependency(g.randDependTp()); err != nil {
+				failedCnt += 1
+				if failedCnt >= MAX_RETRY {
+					break OUTER
+				}
+			} else {
+				break
 			}
 		}
 	}
-	for i := 0; i < edge; i++ {
-		_ = graph.AddDependency(g.randDependTp())
-	}
+	// for i := 0; i < connectCnt; i++ {
+	// 	_ = graph.AddDependency(g.randDependTp())
+	// }
+	fmt.Println("make linear kv")
+	graph.MakeLinearKV()
 	return graph
 }

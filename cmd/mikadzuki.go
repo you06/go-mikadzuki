@@ -5,7 +5,13 @@ import (
 	"os"
 
 	"github.com/spf13/cobra"
-	"github.com/you06/go-mikadzuki/util"
+	"github.com/you06/go-mikadzuki/config"
+	"github.com/you06/go-mikadzuki/graph"
+	"github.com/you06/go-mikadzuki/kv"
+)
+
+var (
+	cfgFile string
 )
 
 var rootCmd = &cobra.Command{
@@ -13,8 +19,19 @@ var rootCmd = &cobra.Command{
 	Short: "MIKADZUKI is a parallel transaction test tool",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
-		util.PrintVersion()
+		cfg := config.NewConfig()
+		if err := cfg.Load(cfgFile); err != nil {
+			panic(err)
+		}
+		manager := kv.NewManager(&cfg.Global)
+		generator := graph.NewGenerator(&manager, &cfg.Global, &cfg.Graph, &cfg.Depend)
+		graph := generator.NewGraph(8, 14)
+		fmt.Println(graph.String())
 	},
+}
+
+func init() {
+	rootCmd.Flags().StringVar(&cfgFile, "config", "config.toml", "config file")
 }
 
 func mikadzukiExecute() {

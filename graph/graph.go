@@ -1,24 +1,33 @@
 package graph
 
 import (
+	"fmt"
 	"math/rand"
+	"strings"
 
 	"github.com/juju/errors"
+	"github.com/you06/go-mikadzuki/kv"
+	"github.com/you06/go-mikadzuki/util"
 )
 
 const MAX_RETRY = 10
 
+// Graph is the dependencies graph
+// all the timelines should begin with `Begin` and end with `Commit` or `Rollback`
+// the first transaction from each timeline should not depend on others
 type Graph struct {
 	allocID    int
 	timelines  []Timeline
 	dependency int
+	schema     *kv.Schema
 }
 
-func NewGraph() Graph {
+func NewGraph(kvManager *kv.Manager) Graph {
 	return Graph{
 		allocID:    0,
 		timelines:  []Timeline{},
 		dependency: 0,
+		schema:     kvManager.NewSchema(),
 	}
 }
 
@@ -37,17 +46,6 @@ func (g *Graph) GetTimeline(n int) *Timeline {
 }
 
 func (g *Graph) AddDependency(dependTp DependTp) error {
-	for i := 0; i < MAX_RETRY; i++ {
-		if err := g.TryAddDependency(dependTp); err != nil && i == MAX_RETRY-1 {
-			return errors.Trace(err)
-		} else {
-			return nil
-		}
-	}
-	panic("unreachable")
-}
-
-func (g *Graph) TryAddDependency(dependTp DependTp) error {
 	ts := len(g.timelines)
 	if ts == 1 {
 		return errors.New("connot connect between 1 timeline")
@@ -69,11 +67,20 @@ func (g *Graph) TryAddDependency(dependTp DependTp) error {
 			t2 = rand.Intn(ts)
 		}
 		a1 = rand.Intn(len(g.timelines[t1].actions))
+		actions1 = g.GetTransaction(t1, a1)
 		a2 = rand.Intn(len(g.timelines[t2].actions))
-		if dependTp.CheckValidFrom(g.timelines[t1].actions[a1].tp) &&
-			dependTp.CheckValidTo(g.timelines[t2].actions[a2].tp) {
-			actions1 = g.GetTransaction(t1, a1)
+		actions2 = g.GetTransaction(t2, a2)
+		for j := 0; j < MAX_RETRY && actions2[0].id == 0; j++ {
+			a2 = rand.Intn(len(g.timelines[t2].actions))
 			actions2 = g.GetTransaction(t2, a2)
+		}
+		if actions2[0].id == 0 {
+			return errors.New("failed to get non-first transaction")
+		}
+		if len(g.timelines[t1].actions[a1].vIns) == 0 &&
+			len(g.timelines[t2].actions[a2].vIns) == 0 &&
+			dependTp.CheckValidFrom(g.timelines[t1].actions[a1].tp) &&
+			dependTp.CheckValidTo(g.timelines[t2].actions[a2].tp) {
 			if dependTp.CheckValidLastFrom(actions1[len(actions1)-1].tp) &&
 				dependTp.CheckValidLastTo(actions2[len(actions2)-1].tp) {
 				action1 = dependTp.GetActionFrom(actions1)
@@ -115,7 +122,7 @@ func (g *Graph) GetTransaction(t, a int) []Action {
 		r++
 	}
 	res := make([]Action, r-l+1)
-	copy(res, timeline.actions[l-1:r])
+	copy(res, timeline.actions[l:r+1])
 	return res
 }
 
@@ -139,7 +146,7 @@ func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
 			return false
 		}
 		visited[t1][a1] = true
-		nexts := g.timelines[t1].actions[t2].outs
+		nexts := g.timelines[t1].actions[a1].outs
 		for _, next := range nexts {
 			if dfs(next.tID, next.aID, t2, a2) {
 				return true
@@ -147,12 +154,20 @@ func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
 		}
 		return false
 	}
-	return dfs(t1, a1, t2, a2)
+	return dfs(t2, a2, t1, a1)
 }
 
 func (g *Graph) ConnectTxnDepend(t1, a1, t2, a2 int, tp DependTp) {
 	from := g.GetTimeline(t1).GetAction(a1)
 	to := g.GetTimeline(t2).GetAction(a2)
+	// avoid adding duplicated dependency
+	for _, out := range from.outs {
+		if out.tID == t2 && out.aID == a2 && out.tp == tp {
+			return
+		}
+	}
+	fmt.Println(tp, "connect txn depend from", t1, a1, "to", t2, a2, "success")
+
 	from.outs = append(from.outs, Depend{
 		tID: t2,
 		aID: a2,
@@ -168,6 +183,7 @@ func (g *Graph) ConnectTxnDepend(t1, a1, t2, a2 int, tp DependTp) {
 func (g *Graph) ConnectValueDepend(t1, a1, t2, a2 int, tp DependTp) {
 	from := g.GetTimeline(t1).GetAction(a1)
 	to := g.GetTimeline(t2).GetAction(a2)
+	fmt.Println(tp, "connect value depend from", t1, a1, "to", t2, a2, "success")
 	from.vOuts = append(from.vOuts, Depend{
 		tID: t2,
 		aID: a2,
@@ -178,4 +194,212 @@ func (g *Graph) ConnectValueDepend(t1, a1, t2, a2 int, tp DependTp) {
 		aID: a1,
 		tp:  tp,
 	})
+}
+
+func (g *Graph) countNoDependAction() int {
+	cnt := 0
+	for _, timeline := range g.timelines {
+		for _, action := range timeline.actions {
+			if action.tp != Begin &&
+				action.tp != Commit &&
+				action.tp != Rollback {
+				if len(action.vIns) == 0 {
+					cnt += 1
+				}
+			}
+		}
+	}
+	return cnt
+}
+
+func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) bool {
+	before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
+	if !before.knowValue {
+		return false
+	}
+	action.knowValue = true
+	txn := g.schema.KVs[before.kID].Begin()
+	util.AssertEQ(txn.KID, before.kID)
+	if action.tp.IsRead() {
+		action.kID = txn.KID
+		action.vID = before.vID
+		for _, t := range *txns {
+			if t.KID == txn.KID {
+				action.vID = t.Latest
+				return true
+			}
+		}
+		txn.Latest = before.vID
+		txns.Push(txn)
+	} else if action.tp.IsWrite() {
+		action.knowValue = true
+		switch action.tp {
+		case Insert:
+			// may use the old index value to make it a real dependency
+			kv := g.schema.NewKV()
+			txn = kv.Begin()
+			txn.NewValue(g.schema)
+		case Update:
+			txn.PutValue(g.schema)
+		case Delete:
+			txn.DelValue(g.schema)
+		}
+		action.kID = txn.KID
+		action.vID = txn.Latest
+		txns.Push(txn)
+	} else {
+		panic("unreachable")
+	}
+	return true
+}
+
+// MakeLinearKV assign values for actions via value dependencies
+func (g *Graph) MakeLinearKV() {
+	ts := len(g.timelines)
+	progress := make([]int, ts)
+	// initKVs for quick get Realtime dependent KV
+	initKVs := make([]*kv.KV, ts)
+	for i := 0; i < ts; i++ {
+		initKVs[i] = g.schema.NewKV()
+	}
+	// init values for first transactions
+	for i := 0; i < ts; i++ {
+		timeline := g.GetTimeline(i)
+		txns := kv.Txns([]*kv.Txn{initKVs[i].Begin()})
+		progress[i] = 0
+		for {
+			action := timeline.GetAction(progress[i])
+			action.knowValue = true
+			if action.tp == Commit {
+				txns.Commit()
+				break
+			} else if action.tp == Rollback {
+				txns.Rollback()
+				break
+			}
+			txn := txns.Rand()
+			if action.tp.IsWrite() {
+				switch action.tp {
+				case Insert:
+					if txn.Latest != kv.NULL_VALUE_ID {
+						txn = g.schema.NewKV().Begin()
+					}
+					txn.NewValue(g.schema)
+					action.kID = txn.KID
+					action.vID = txn.Latest
+				case Update:
+					txn.PutValue(g.schema)
+					action.kID = txn.KID
+					action.vID = txn.Latest
+				case Delete:
+					txn.DelValue(g.schema)
+					action.kID = txn.KID
+					action.vID = txn.Latest
+				}
+			} else if action.tp.IsRead() {
+				action.kID = txn.KID
+				action.vID = txn.Latest
+			}
+			progress[i] += 1
+		}
+	}
+
+	// txnsStore keeps transaction breaks by dependency in generation
+	txnsStore := make(map[int]*kv.Txns)
+	waitActions := make([]map[int]struct{}, ts)
+	for i := 0; i < ts; i++ {
+		waitActions[i] = make(map[int]struct{})
+	}
+	for {
+		done := true
+		for i := 0; i < ts; i++ {
+			timeline := g.GetTimeline(i)
+			if progress[i] == timeline.allocID-1 {
+				continue
+			}
+			var txns kv.Txns
+			if t, ok := txnsStore[i]; ok {
+				txns = *t
+			} else {
+				txns = kv.Txns([]*kv.Txn{initKVs[i].Begin()})
+				txnsStore[i] = &txns
+			}
+			if len(waitActions[i]) != 0 {
+				var doneActionsIDs []int
+				for id := range waitActions[i] {
+					action := timeline.GetAction(id)
+					// although we can suppose the txn added here is never used again
+					// but add txn into txns break the internal order
+					if g.getValueFromDepend(action, &txns) {
+						doneActionsIDs = append(doneActionsIDs, id)
+					}
+				}
+				for _, id := range doneActionsIDs {
+					delete(waitActions[i], id)
+				}
+				if len(waitActions[i]) == 0 {
+					delete(txnsStore, i)
+				}
+				continue
+			}
+			for {
+				progress[i] += 1
+				action := timeline.GetAction(progress[i])
+				if action.tp == Commit {
+					txns.Commit()
+					break
+				} else if action.tp == Rollback {
+					txns.Rollback()
+					break
+				} else if len(action.vIns) > 0 {
+					if !g.getValueFromDepend(action, &txns) {
+						// this should be retry in next loop
+						waitActions[i][progress[i]] = struct{}{}
+						continue
+					}
+				} else {
+					txn := txns.Rand()
+					if action.tp.IsRead() {
+						action.kID = txn.KID
+						action.vID = txn.Latest
+					} else if action.tp.IsWrite() {
+						switch action.tp {
+						case Insert:
+							kv := g.schema.NewKV()
+							txn = kv.Begin()
+							txns.Push(txn)
+							txn.NewValue(g.schema)
+							action.kID = txn.KID
+							action.vID = txn.Latest
+						case Update:
+							txn.PutValue(g.schema)
+							action.vID = txn.Latest
+						case Delete:
+							txn.DelValue(g.schema)
+							action.vID = txn.Latest
+						}
+					}
+					action.knowValue = true
+				}
+			}
+			done = false
+			if len(waitActions[i]) == 0 {
+				delete(txnsStore, i)
+			}
+		}
+		if done {
+			break
+		}
+	}
+}
+
+func (g *Graph) String() string {
+	var b strings.Builder
+	for i, t := range g.timelines {
+		if i != 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(t.String())
+	}
+	return b.String()
 }

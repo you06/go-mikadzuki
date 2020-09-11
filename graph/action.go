@@ -1,8 +1,14 @@
 package graph
 
+import (
+	"fmt"
+	"strings"
+)
+
 type Action struct {
-	id int
-	tp ActionTp
+	id  int
+	tID int
+	tp  ActionTp
 	// outs & ins are transaction dependencies,
 	// which should only exist in Begin, Commit and Rollback actions
 	outs []Depend
@@ -11,6 +17,13 @@ type Action struct {
 	// which should only exist in DML actions
 	vOuts []Depend
 	vIns  []Depend
+	// key id, when it's -1, it means the key is not specified yet
+	kID int
+	// value id, can find out value from kv.Schema
+	// when the value id is -1, it means the value is None
+	// missing Option generic type
+	vID       int
+	knowValue bool
 }
 
 type ActionTp string
@@ -58,33 +71,42 @@ var (
 	}
 )
 
-func NewAction(id int, tp ActionTp) Action {
+func NewAction(id, tID int, tp ActionTp) Action {
 	return Action{
-		id:    id,
-		tp:    tp,
-		outs:  []Depend{},
-		ins:   []Depend{},
-		vOuts: []Depend{},
-		vIns:  []Depend{},
+		id:        id,
+		tID:       tID,
+		tp:        tp,
+		outs:      []Depend{},
+		ins:       []Depend{},
+		vOuts:     []Depend{},
+		vIns:      []Depend{},
+		knowValue: false,
 	}
+}
+
+func (a ActionTp) IsRead() bool {
+	if a == Select ||
+		a == SelectForUpdate {
+		return true
+	}
+	return false
+}
+
+func (a ActionTp) IsWrite() bool {
+	if a == Insert ||
+		a == Update ||
+		a == Delete {
+		return true
+	}
+	return false
 }
 
 func (d DependTp) CheckValidFrom(tp ActionTp) bool {
 	switch d {
 	case RW:
-		switch tp {
-		case Select, SelectForUpdate:
-			return true
-		default:
-			return false
-		}
+		return tp.IsRead()
 	case WW, WR:
-		switch tp {
-		case Insert, Update, Delete:
-			return true
-		default:
-			return false
-		}
+		return tp.IsWrite()
 	default:
 		panic("unreachable")
 	}
@@ -118,19 +140,9 @@ func (d DependTp) GetActionFrom(actions []Action) Action {
 func (d DependTp) CheckValidTo(tp ActionTp) bool {
 	switch d {
 	case WR:
-		switch tp {
-		case Select, SelectForUpdate:
-			return true
-		default:
-			return false
-		}
+		return tp.IsRead()
 	case RW, WW:
-		switch tp {
-		case Insert, Update, Delete:
-			return true
-		default:
-			return false
-		}
+		return tp.IsWrite()
 	default:
 		panic("unreachable")
 	}
@@ -159,4 +171,25 @@ func (d DependTp) GetActionTo(actions []Action) Action {
 	default:
 		panic("unreachable")
 	}
+}
+
+func (a *Action) String() string {
+	var b strings.Builder
+	b.WriteString(string(a.tp))
+	if a.tp.IsRead() || a.tp.IsWrite() {
+		fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
+		for _, d := range a.vIns {
+			fmt.Fprintf(&b, "[%d, %d]", d.tID, d.aID)
+		}
+		for _, d := range a.vOuts {
+			fmt.Fprintf(&b, "{%d, %d}", d.tID, d.aID)
+		}
+	} else {
+		for _, d := range a.ins {
+			if d.tID != a.tID {
+				fmt.Fprintf(&b, "[%d, %d]", d.tID, d.aID)
+			}
+		}
+	}
+	return b.String()
 }

@@ -20,6 +20,7 @@ func TestDefaultConfig(t *testing.T) {
 	// depend fields
 	require.Equal(t, config.Depend.WW, 10)
 	require.Equal(t, config.Depend.WR, 10)
+	require.Equal(t, config.Depend.RW, 10)
 }
 
 func TestLoadConfig(t *testing.T) {
@@ -54,5 +55,6 @@ func TestLoadConfig(t *testing.T) {
 	require.Equal(t, dependMap, map[string]int{
 		"WW": 1,
 		"WR": 1,
+		"RW": 1,
 	})
 }
