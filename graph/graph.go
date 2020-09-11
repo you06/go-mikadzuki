@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -410,6 +411,10 @@ func (g *Graph) MakeLinearKV() {
 			}
 		}
 	}
+}
+
+func (g *Graph) IterateGraph(exec func(tp ActionTp, sql string) (*sql.Result, error)) error {
+	return nil
 }
 
 func (g *Graph) String() string {

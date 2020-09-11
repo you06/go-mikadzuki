@@ -1,13 +1,15 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/spf13/cobra"
 	"github.com/you06/go-mikadzuki/config"
-	"github.com/you06/go-mikadzuki/graph"
-	"github.com/you06/go-mikadzuki/kv"
+	"github.com/you06/go-mikadzuki/manager"
 )
 
 var (
@@ -23,10 +25,28 @@ var rootCmd = &cobra.Command{
 		if err := cfg.Load(cfgFile); err != nil {
 			panic(err)
 		}
-		manager := kv.NewManager(&cfg.Global)
-		generator := graph.NewGenerator(&manager, &cfg.Global, &cfg.Graph, &cfg.Depend)
-		graph := generator.NewGraph(8, 14)
-		fmt.Println(graph.String())
+		mgr := manager.NewManager(&cfg)
+		ctx, cancel := context.WithCancel(context.Background())
+		go func() {
+			sc := make(chan os.Signal, 1)
+			signal.Notify(sc,
+				os.Kill,
+				os.Interrupt,
+				syscall.SIGHUP,
+				syscall.SIGINT,
+				syscall.SIGTERM,
+				syscall.SIGQUIT)
+
+			fmt.Printf("Got signal %d to exit.\n", <-sc)
+			cancel()
+			os.Exit(0)
+		}()
+		mgr.Run(ctx)
+
+		//
+		//generator := graph.NewGenerator(&manager, &cfg.Global, &cfg.Graph, &cfg.Depend)
+		//graph := generator.NewGraph(8, 14)
+		//fmt.Println(graph.String())
 	},
 }
 

@@ -8,6 +8,11 @@ import (
 
 func TestDefaultConfig(t *testing.T) {
 	config := NewConfig()
+	// global fields
+	require.Equal(t, config.Global.DSN, "root:@tcp(172.17.0.1:4000)/")
+	require.Equal(t, config.Global.Database, "mikadzuki")
+	require.Equal(t, config.Global.Thread, 8)
+	require.Equal(t, config.Global.Action, 20)
 	// graph fields
 	require.Equal(t, config.Graph.Begin, 20)
 	require.Equal(t, config.Graph.Commit, 20)
@@ -26,6 +31,11 @@ func TestDefaultConfig(t *testing.T) {
 func TestLoadConfig(t *testing.T) {
 	config := NewConfig()
 	require.Nil(t, config.Load("./config.test.toml"))
+	// global fields
+	require.Equal(t, config.Global.DSN, "root:@tcp(172.17.0.1:3306)/")
+	require.Equal(t, config.Global.Database, "test")
+	require.Equal(t, config.Global.Thread, 4)
+	require.Equal(t, config.Global.Action, 10)
 	// graph fields
 	require.Equal(t, config.Graph.Begin, 2)
 	require.Equal(t, config.Graph.Commit, 2)

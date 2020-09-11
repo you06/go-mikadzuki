@@ -1,3 +1,9 @@
+[global]
+dsn = "root:@tcp(172.17.0.1:3306)/"
+database = "test"
+thread = 4
+action = 10
+
 [graph]
 begin = 2
 commit = 2
