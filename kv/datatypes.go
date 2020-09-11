@@ -130,3 +130,19 @@ func (d DataType) ToHashString(data interface{}) string {
 		panic(fmt.Sprintf("unimplement type %s", d))
 	}
 }
+
+func (d DataType) ValToString(data interface{}) string {
+	// null value will not lead to duplicated unique key
+	// here we use random hash string to avoid it
+	if _, ok := data.(Null); ok {
+		return "NULL"
+	}
+	switch d {
+	case TinyInt, Int, BigInt:
+		return strconv.Itoa(data.(int))
+	case Date, Datetime, Timestamp, Char, Varchar, Text:
+		return fmt.Sprintf(`"%s"`, data.(string))
+	default:
+		panic(fmt.Sprintf("unimplement type %s", d))
+	}
+}

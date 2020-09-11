@@ -2,6 +2,7 @@ package graph
 
 import (
 	"fmt"
+	"github.com/you06/go-mikadzuki/kv"
 	"strings"
 )
 
@@ -24,6 +25,7 @@ type Action struct {
 	// missing Option generic type
 	vID       int
 	knowValue bool
+	SQL       string
 }
 
 type ActionTp string
@@ -81,6 +83,7 @@ func NewAction(id, tID int, tp ActionTp) Action {
 		vOuts:     []Depend{},
 		vIns:      []Depend{},
 		knowValue: false,
+		vID:       kv.INVALID_VALUE_ID,
 	}
 }
 

@@ -3,7 +3,8 @@ package kv
 import "math/rand"
 
 const (
-	NULL_VALUE_ID = -1
+	NULL_VALUE_ID    = -1
+	INVALID_VALUE_ID = -2
 )
 
 type KV struct {
@@ -68,30 +69,35 @@ func (k *KV) DelValue(v int) {
 	delete(k.Values, v)
 }
 
-func (t *Txn) NewValue(s *Schema) {
+func (t *Txn) NewValue(s *Schema) string {
 	id := s.NewValue(t.kv.ID)
 	t.Latest = id
 	t.History = append(t.History, KVAction{
 		Tp:      KVActionNew,
 		ValueID: id,
 	})
+	return s.InsertSQL(id)
 }
 
-func (t *Txn) PutValue(s *Schema) {
-	id := s.PutValue(t.kv.ID, t.Latest)
-	t.Latest = id
+func (t *Txn) PutValue(s *Schema) string {
+	oldID := t.Latest
+	newID := s.PutValue(t.kv.ID, oldID)
+	t.Latest = newID
 	t.History = append(t.History, KVAction{
 		Tp:      KVActionPut,
-		ValueID: id,
+		ValueID: newID,
 	})
+	return s.UpdateSQL(oldID, newID)
 }
 
-func (t *Txn) DelValue(s *Schema) {
+func (t *Txn) DelValue(s *Schema) string {
+	id := t.Latest
 	t.Latest = NULL_VALUE_ID
 	t.History = append(t.History, KVAction{
 		Tp:      KVActionDel,
 		ValueID: NULL_VALUE_ID,
 	})
+	return s.DeleteSQL(id)
 }
 
 // Commit apply mutations to KV
@@ -118,7 +124,7 @@ func (ts *Txns) Push(t *Txn) {
 }
 
 func (ts *Txns) Last() *Txn {
-	return (*ts)[len((*ts))-1]
+	return (*ts)[len(*ts)-1]
 }
 
 func (ts *Txns) Commit() {
