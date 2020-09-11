@@ -38,6 +38,13 @@ func (m *Manager) NewSchema() *Schema {
 		VID2KID:    make(map[int]int),
 		Data:       [][]interface{}{},
 	}
+	schema.AddColumn(true)
+	for i := 1; i < COLUMN_NUM; i++ {
+		schema.AddColumn(false)
+	}
+	for i := 0; i < INDEX_NUM; i++ {
+		schema.AddUnique()
+	}
 	m.schemas = append(m.schemas, schema)
 	return &m.schemas[id]
 }

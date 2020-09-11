@@ -1,10 +1,13 @@
 package graph
 
 import (
+	"fmt"
 	"math/rand"
+	"strings"
 
 	"github.com/juju/errors"
 	"github.com/you06/go-mikadzuki/kv"
+	"github.com/you06/go-mikadzuki/util"
 )
 
 const MAX_RETRY = 10
@@ -67,11 +70,16 @@ func (g *Graph) AddDependency(dependTp DependTp) error {
 		actions1 = g.GetTransaction(t1, a1)
 		a2 = rand.Intn(len(g.timelines[t2].actions))
 		actions2 = g.GetTransaction(t2, a2)
-		for actions2[0].id == 0 {
+		for j := 0; j < MAX_RETRY && actions2[0].id == 0; j++ {
 			a2 = rand.Intn(len(g.timelines[t2].actions))
 			actions2 = g.GetTransaction(t2, a2)
 		}
-		if dependTp.CheckValidFrom(g.timelines[t1].actions[a1].tp) &&
+		if actions2[0].id == 0 {
+			return errors.New("failed to get non-first transaction")
+		}
+		if len(g.timelines[t1].actions[a1].vIns) == 0 &&
+			len(g.timelines[t2].actions[a2].vIns) == 0 &&
+			dependTp.CheckValidFrom(g.timelines[t1].actions[a1].tp) &&
 			dependTp.CheckValidTo(g.timelines[t2].actions[a2].tp) {
 			if dependTp.CheckValidLastFrom(actions1[len(actions1)-1].tp) &&
 				dependTp.CheckValidLastTo(actions2[len(actions2)-1].tp) {
@@ -114,7 +122,7 @@ func (g *Graph) GetTransaction(t, a int) []Action {
 		r++
 	}
 	res := make([]Action, r-l+1)
-	copy(res, timeline.actions[l-1:r])
+	copy(res, timeline.actions[l:r+1])
 	return res
 }
 
@@ -138,7 +146,7 @@ func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
 			return false
 		}
 		visited[t1][a1] = true
-		nexts := g.timelines[t1].actions[t2].outs
+		nexts := g.timelines[t1].actions[a1].outs
 		for _, next := range nexts {
 			if dfs(next.tID, next.aID, t2, a2) {
 				return true
@@ -146,7 +154,7 @@ func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
 		}
 		return false
 	}
-	return dfs(t1, a1, t2, a2)
+	return dfs(t2, a2, t1, a1)
 }
 
 func (g *Graph) ConnectTxnDepend(t1, a1, t2, a2 int, tp DependTp) {
@@ -158,6 +166,8 @@ func (g *Graph) ConnectTxnDepend(t1, a1, t2, a2 int, tp DependTp) {
 			return
 		}
 	}
+	fmt.Println(tp, "connect txn depend from", t1, a1, "to", t2, a2, "success")
+
 	from.outs = append(from.outs, Depend{
 		tID: t2,
 		aID: a2,
@@ -212,83 +222,145 @@ func (g *Graph) MakeLinearKV() {
 	// init values for first transactions
 	for i := 0; i < ts; i++ {
 		timeline := g.GetTimeline(i)
-		kv := initKVs[i]
+		txns := kv.Txns([]*kv.Txn{initKVs[i].Begin()})
 		progress[i] = 0
 		for {
 			action := timeline.GetAction(progress[i])
-			if action.tp == Commit || action.tp == Rollback {
+			action.knowValue = true
+			if action.tp == Commit {
+				txns.Commit()
+				break
+			} else if action.tp == Rollback {
+				txns.Rollback()
 				break
 			}
+			txn := txns.Rand()
 			if action.tp.IsWrite() {
-				action.kID = kv.ID
 				switch action.tp {
 				case Insert:
-					if kv.Latest != -1 {
-						kv = g.schema.NewKV()
+					if txn.Latest != kv.NULL_VALUE_ID {
+						txn = g.schema.NewKV().Begin()
 					}
-					kv.NewValue(g.schema)
-					action.vID = kv.Latest
+					txn.NewValue(g.schema)
+					action.kID = txn.KID
+					action.vID = txn.Latest
 				case Update:
-					kv.PutValue(g.schema)
-					action.vID = kv.Latest
+					txn.PutValue(g.schema)
+					action.kID = txn.KID
+					action.vID = txn.Latest
 				case Delete:
-					kv.DelValue(g.schema)
-					action.vID = kv.Latest
+					txn.DelValue(g.schema)
+					action.kID = txn.KID
+					action.vID = txn.Latest
 				}
 			} else if action.tp.IsRead() {
-				action.kID = kv.ID
-				action.vID = kv.Latest
+				action.kID = txn.KID
+				action.vID = txn.Latest
 			}
 			progress[i] += 1
 		}
 	}
 
-	for i := 0; i < ts; i++ {
-		origin := progress[i]
-		timeline := g.GetTimeline(i)
-		progress[i] += 1
-		deferCalc := false
-		kv := initKVs[i]
-		for {
-			action := timeline.GetAction(progress[i])
-			if len(action.vIns) > 0 {
-				before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
-				if before.kID == -1 {
-					deferCalc = true
-					break
-				}
-				if action.tp.IsRead() {
-					action.vID = g.schema.KVs[before.kID].Latest
-				} else if action.tp.IsWrite() {
-					g.schema.KVs[before.kID].PutValue(g.schema)
-				} else {
-					panic("unreachable")
-				}
+	// txnsStore keeps transaction breaks by dependency in generation
+	txnsStore := make(map[int]*kv.Txns)
+	for {
+		done := true
+		for i := 0; i < ts; i++ {
+			timeline := g.GetTimeline(i)
+			if progress[i] == timeline.allocID-1 {
+				continue
+			}
+			var txns kv.Txns
+			if t, ok := txnsStore[i]; ok {
+				txns = *t
 			} else {
-				if action.tp.IsRead() {
-					action.kID = kv.ID
-					action.vID = kv.Latest
-				} else if action.tp.IsWrite() {
-					switch action.tp {
-					case Insert:
-						kv = g.schema.NewKV()
-						kv.NewValue(g.schema)
-						action.kID = kv.ID
-						action.vID = kv.Latest
-					case Update:
-						kv.PutValue(g.schema)
-						action.vID = kv.Latest
-					case Delete:
-						kv.DelValue(g.schema)
-						action.vID = kv.Latest
+				txns = kv.Txns([]*kv.Txn{initKVs[i].Begin()})
+				txnsStore[i] = &txns
+			}
+			for {
+				progress[i] += 1
+				action := timeline.GetAction(progress[i])
+				if action.tp == Commit {
+					txns.Commit()
+					delete(txnsStore, i)
+					break
+				} else if action.tp == Rollback {
+					txns.Rollback()
+					delete(txnsStore, i)
+					break
+				} else if len(action.vIns) > 0 {
+					before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
+					if !before.knowValue {
+						// this should be retry in next loop
+						progress[i] -= 1
+						break
 					}
+					action.knowValue = true
+					txn := g.schema.KVs[before.kID].Begin()
+					util.AssertEQ(txn.KID, before.kID)
+					if action.tp.IsRead() {
+						action.kID = txn.KID
+						action.vID = before.vID
+					} else if action.tp.IsWrite() {
+						action.knowValue = true
+						switch action.tp {
+						case Insert:
+							// may use the old index value to make it a real dependency
+							kv := g.schema.NewKV()
+							txn = kv.Begin()
+							txns.Push(txn)
+							txn.NewValue(g.schema)
+						case Update:
+							txn.PutValue(g.schema)
+						case Delete:
+							txn.DelValue(g.schema)
+						}
+						action.kID = txn.KID
+						action.vID = txn.Latest
+					} else {
+						panic("unreachable")
+					}
+					txns.Push(txn)
+				} else {
+					txn := txns.Rand()
+					if action.tp.IsRead() {
+						action.kID = txn.KID
+						action.vID = txn.Latest
+					} else if action.tp.IsWrite() {
+						switch action.tp {
+						case Insert:
+							kv := g.schema.NewKV()
+							txn = kv.Begin()
+							txns.Push(txn)
+							txn.NewValue(g.schema)
+							action.kID = txn.KID
+							action.vID = txn.Latest
+						case Update:
+							txn.PutValue(g.schema)
+							action.vID = txn.Latest
+						case Delete:
+							txn.DelValue(g.schema)
+							action.vID = txn.Latest
+						}
+					}
+					action.knowValue = true
 				}
 			}
+			done = false
 		}
-		// reset the process and get value later
-		// the value already set will be overwritten
-		if deferCalc {
-			progress[i] = origin
+		if done {
+			break
 		}
 	}
+}
+
+func (g *Graph) String() string {
+	var b strings.Builder
+	for i, t := range g.timelines {
+		if i != 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(t.String())
+	}
+	return b.String()
 }

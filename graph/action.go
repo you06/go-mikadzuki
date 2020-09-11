@@ -1,8 +1,14 @@
 package graph
 
+import (
+	"fmt"
+	"strings"
+)
+
 type Action struct {
-	id int
-	tp ActionTp
+	id  int
+	tID int
+	tp  ActionTp
 	// outs & ins are transaction dependencies,
 	// which should only exist in Begin, Commit and Rollback actions
 	outs []Depend
@@ -16,7 +22,8 @@ type Action struct {
 	// value id, can find out value from kv.Schema
 	// when the value id is -1, it means the value is None
 	// missing Option generic type
-	vID int
+	vID       int
+	knowValue bool
 }
 
 type ActionTp string
@@ -64,14 +71,16 @@ var (
 	}
 )
 
-func NewAction(id int, tp ActionTp) Action {
+func NewAction(id, tID int, tp ActionTp) Action {
 	return Action{
-		id:    id,
-		tp:    tp,
-		outs:  []Depend{},
-		ins:   []Depend{},
-		vOuts: []Depend{},
-		vIns:  []Depend{},
+		id:        id,
+		tID:       tID,
+		tp:        tp,
+		outs:      []Depend{},
+		ins:       []Depend{},
+		vOuts:     []Depend{},
+		vIns:      []Depend{},
+		knowValue: false,
 	}
 }
 
@@ -162,4 +171,25 @@ func (d DependTp) GetActionTo(actions []Action) Action {
 	default:
 		panic("unreachable")
 	}
+}
+
+func (a *Action) String() string {
+	var b strings.Builder
+	b.WriteString(string(a.tp))
+	if a.tp.IsRead() || a.tp.IsWrite() {
+		fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
+		for _, d := range a.vIns {
+			fmt.Fprintf(&b, "[%d, %d]", d.tID, d.aID)
+		}
+		for _, d := range a.vOuts {
+			fmt.Fprintf(&b, "{%d, %d}", d.tID, d.aID)
+		}
+	} else {
+		for _, d := range a.ins {
+			if d.tID != a.tID {
+				fmt.Fprintf(&b, "[%d, %d]", d.tID, d.aID)
+			}
+		}
+	}
+	return b.String()
 }

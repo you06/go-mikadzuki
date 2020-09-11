@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"math/rand"
 
 	"github.com/you06/go-mikadzuki/config"
@@ -79,30 +80,56 @@ func (g *Generator) randDependTp() DependTp {
 func (g *Generator) NewGraph(conn, length int) Graph {
 	g.kvManager.Reset()
 	graph := NewGraph(g.kvManager)
+	fmt.Println("make graph")
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
-		var before ActionTp
+		var (
+			beforeTp ActionTp
+			tp       ActionTp
+		)
 		for j := 0; j < length; j++ {
 			// start from begin and stop as commit
 			if j == 0 {
-				timeline.NewACtionWithTp(Begin)
+				tp = Begin
 			} else if j == length-1 {
-				timeline.NewACtionWithTp(Commit)
-			} else {
-				tp := g.randActionTp()
-				if before == Commit || before == Rollback {
-					tp = Begin
+				if beforeTp == Commit || beforeTp == Rollback {
+					break
 				}
-				timeline.NewACtionWithTp(tp)
-				before = tp
+				tp = Commit
+			} else {
+				tp = Begin
+				if beforeTp != Commit && beforeTp != Rollback {
+					for tp == Begin {
+						tp = g.randActionTp()
+					}
+				}
+			}
+			timeline.NewACtionWithTp(tp)
+			beforeTp = tp
+		}
+	}
+	fmt.Println("make dependency")
+	// noDepend := graph.countNoDependAction()
+	// connectCnt := int(float64(noDepend) * g.globalConfig.DependRatio / 2)
+	failedCnt := 0
+OUTER:
+	for {
+		failedCnt = 0
+		for {
+			if err := graph.AddDependency(g.randDependTp()); err != nil {
+				failedCnt += 1
+				if failedCnt >= MAX_RETRY {
+					break OUTER
+				}
+			} else {
+				break
 			}
 		}
 	}
-	noDepend := graph.countNoDependAction()
-	connectCnt := int(float64(noDepend) * g.globalConfig.DependRatio / 2)
-	for i := 0; i < connectCnt; i++ {
-		_ = graph.AddDependency(g.randDependTp())
-	}
+	// for i := 0; i < connectCnt; i++ {
+	// 	_ = graph.AddDependency(g.randDependTp())
+	// }
+	fmt.Println("make linear kv")
 	graph.MakeLinearKV()
 	return graph
 }

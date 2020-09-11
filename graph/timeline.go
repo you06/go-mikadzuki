@@ -1,5 +1,9 @@
 package graph
 
+import (
+	"strings"
+)
+
 type Timeline struct {
 	id      int
 	allocID int
@@ -16,7 +20,7 @@ func NewTimeline(id int) Timeline {
 
 func (t *Timeline) NewACtionWithTp(actionTp ActionTp) *Action {
 	id := t.allocID
-	action := NewAction(id, actionTp)
+	action := NewAction(id, t.id, actionTp)
 	if id > 0 {
 		before := id - 1
 		t.actions[before].outs = append(t.actions[before].outs, Depend{
@@ -40,4 +44,15 @@ func (t *Timeline) GetAction(n int) *Action {
 		return &t.actions[n]
 	}
 	return nil
+}
+
+func (t *Timeline) String() string {
+	var b strings.Builder
+	for i, a := range t.actions {
+		if i != 0 {
+			b.WriteString(" -> ")
+		}
+		b.WriteString(a.String())
+	}
+	return b.String()
 }

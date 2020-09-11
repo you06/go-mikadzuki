@@ -8,8 +8,13 @@ import (
 	"github.com/you06/go-mikadzuki/util"
 )
 
-// TODO: move this into config file
-const UNIQUE_RATIO = 0.3
+// TODO: move these constants into config file
+const (
+	COLUMN_NUM    = 10
+	INDEX_NUM     = 2
+	PRIMARY_RATIO = 0.2
+	UNIQUE_RATIO  = 0.3
+)
 
 type Schema struct {
 	SchemaID   int
@@ -33,15 +38,15 @@ type Column struct {
 	Primary bool
 }
 
-func (s *Schema) AddColumn() {
+func (s *Schema) AddColumn(mustPrimary bool) {
 	tp := RdType()
-	null := util.RdBool()
-	primary := false
-	if null {
-		primary = util.RdBool()
-		if primary {
-			s.Primary = append(s.Primary, len(s.Columns))
-		}
+	null := mustPrimary || util.RdBool()
+	primary := mustPrimary || false
+	if null && !mustPrimary {
+		primary = util.RdBoolRatio(PRIMARY_RATIO)
+	}
+	if primary {
+		s.Primary = append(s.Primary, len(s.Columns))
 	}
 	column := Column{
 		Name:    fmt.Sprintf("col_%d", len(s.Columns)),
@@ -136,44 +141,77 @@ func (s *Schema) NewValue(kID int) int {
 }
 
 // PutValue update value for a given key (Update operation)
-func (s *Schema) PutValue(kID int) int {
-	id := s.AllocVID
+func (s *Schema) PutValue(kID, oldID int) int {
+	newID := s.AllocVID
 	s.AllocVID += 1
-	s.VID2KID[id] = kID
-	s.UpdateValue(id)
-	return id
+	s.VID2KID[newID] = kID
+	s.UpdateValue(oldID, newID)
+	return newID
 }
 
 // DelValue delete value for a given key (Delete operation)
-func (s *Schema) DelValue(kID int) {
-	// complete me
-	// delete value id from kv
-	// delete index
+func (s *Schema) DelValue(vID int) {
+	s.DeleteValue(vID)
 }
 
 func (s *Schema) IfKeyDuplicated(value []interface{}, primaryKey *[]string, uniqueKeys *[][]string) bool {
-	if len(s.Primary) > 0 {
-		for i := 0; i < len(s.Primary); i++ {
-			pos := s.Primary[i]
-			(*primaryKey)[i] = s.Columns[pos].Tp.ToHashString(value[pos])
-		}
-		// if this value cause primary key duplicated, retry it
-		if _, ok := s.PrimarySet[strings.Join((*primaryKey), "-")]; ok {
+	// if this value cause primary key duplicated, retry it
+	if _, ok := s.PrimarySet[strings.Join((*primaryKey), "-")]; ok {
+		return true
+	}
+	for i := 0; i < len(s.Unique); i++ {
+		if _, ok := s.UniqueSet[i][strings.Join((*uniqueKeys)[i], "-")]; ok {
 			return true
 		}
 	}
+	return false
+}
+
+func (s *Schema) AddPrimaryKey(primaryKey []string) {
+	s.PrimarySet[strings.Join((primaryKey), "-")] = struct{}{}
+}
+
+func (s *Schema) DelPrimaryKey(primaryKey []string) {
+	delete(s.PrimarySet, strings.Join((primaryKey), "-"))
+}
+
+func (s *Schema) AddUniqueKeys(uniqueKeys [][]string) {
+	for i := 0; i < len(s.Unique); i++ {
+		s.UniqueSet[i][strings.Join(uniqueKeys[i], "-")] = struct{}{}
+	}
+}
+
+func (s *Schema) DelUniqueKeys(uniqueKeys [][]string) {
+	for i := 0; i < len(s.Unique); i++ {
+		delete(s.UniqueSet[i], strings.Join(uniqueKeys[i], "-"))
+	}
+}
+
+func (s *Schema) MakePrimaryKey(value []interface{}, primaryKey *[]string) {
+	for i := 0; i < len(s.Primary); i++ {
+		pos := s.Primary[i]
+		(*primaryKey)[i] = s.Columns[pos].Tp.ToHashString(value[pos])
+	}
+}
+
+func (s *Schema) MakeUniqueKey(value []interface{}, uniqueKeys *[][]string) {
 	for i := 0; i < len(s.Unique); i++ {
 		uniqueKey := make([]string, len(s.Unique[i]))
 		for j := 0; j < len(s.Unique[i]); j++ {
 			pos := s.Unique[i][j]
 			uniqueKey[j] = s.Columns[pos].Tp.ToHashString(value[pos])
 		}
-		if _, ok := s.UniqueSet[i][strings.Join(uniqueKey, "-")]; ok {
-			return true
-		}
 		(*uniqueKeys)[i] = uniqueKey
 	}
-	return false
+}
+
+func (s *Schema) MakeValue() []interface{} {
+	cols := len(s.Columns)
+	value := make([]interface{}, cols)
+	for i := 0; i < cols; i++ {
+		value[i] = s.Columns[i].Tp.RandValue()
+	}
+	return value
 }
 
 // TODO: add test for it
@@ -181,14 +219,14 @@ func (s *Schema) CreateValue(vID int) {
 	if len(s.Data) != vID {
 		panic("data and value index mismatch")
 	}
-	cols := len(s.Columns)
-	value := make([]interface{}, cols)
+	var value []interface{}
 	primaryKey := make([]string, len(s.Primary))
 	uniqueKeys := make([][]string, len(s.Unique))
+
 	for {
-		for i := 0; i < cols; i++ {
-			value[i] = s.Columns[i].Tp.RandValue()
-		}
+		value = s.MakeValue()
+		s.MakePrimaryKey(value, &primaryKey)
+		s.MakeUniqueKey(value, &uniqueKeys)
 		dup := s.IfKeyDuplicated(value, &primaryKey, &uniqueKeys)
 		if dup {
 			continue
@@ -208,6 +246,46 @@ func (s *Schema) CreateValue(vID int) {
 // 2. update a unique-index would may cause some complex problem
 // if a WW dependency is caused by a replace into, this kv will split
 // 3. update primary key is similar to unique-index, but it may cause further influence
-func (s *Schema) UpdateValue(vID int) {
+// For the above, the key ID in graph should not be changed by this update
+func (s *Schema) UpdateValue(oldID, newID int) {
+	if len(s.Data) != newID {
+		panic("data and value index mismatch")
+	}
+	var value []interface{}
+	primaryKey := make([]string, len(s.Primary))
+	uniqueKeys := make([][]string, len(s.Unique))
+	// delete old index, so that it won't conflict with itself
+	if oldID != NULL_VALUE_ID {
+		s.MakePrimaryKey(s.Data[oldID], &primaryKey)
+		s.MakeUniqueKey(s.Data[oldID], &uniqueKeys)
+		s.DelPrimaryKey(primaryKey)
+		s.DelUniqueKeys(uniqueKeys)
+	}
+	for {
+		value = s.MakeValue()
+		s.MakePrimaryKey(value, &primaryKey)
+		s.MakeUniqueKey(value, &uniqueKeys)
+		dup := s.IfKeyDuplicated(value, &primaryKey, &uniqueKeys)
+		if dup {
+			continue
+		}
+		// add new index
+		s.AddPrimaryKey(primaryKey)
+		s.AddUniqueKeys(uniqueKeys)
+		break
+	}
+	// check if index valid
+	s.Data = append(s.Data, value)
+}
 
+func (s *Schema) DeleteValue(vID int) {
+	if vID == NULL_VALUE_ID {
+		return
+	}
+	primaryKey := make([]string, len(s.Primary))
+	uniqueKeys := make([][]string, len(s.Unique))
+	s.MakePrimaryKey(s.Data[vID], &primaryKey)
+	s.MakeUniqueKey(s.Data[vID], &uniqueKeys)
+	s.DelPrimaryKey(primaryKey)
+	s.DelUniqueKeys(uniqueKeys)
 }

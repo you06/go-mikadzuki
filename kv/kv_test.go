@@ -64,8 +64,23 @@ UNIQUE u_0(val, k))`)
 func TestIfKeyDuplicated(t *testing.T) {
 	primaryKey := make([]string, 2)
 	uniqueKeys := make([][]string, 1)
-	require.True(t, schema.IfKeyDuplicated([]interface{}{17, "kaeru", "2020-08-31"}, &primaryKey, &uniqueKeys))
-	require.True(t, schema.IfKeyDuplicated([]interface{}{17, "kaeru", "2020-08-17"}, &primaryKey, &uniqueKeys))
-	require.True(t, schema.IfKeyDuplicated([]interface{}{10, "kaeru", "2020-08-31"}, &primaryKey, &uniqueKeys))
-	require.False(t, schema.IfKeyDuplicated([]interface{}{10, "kaeru", "2020-08-17"}, &primaryKey, &uniqueKeys))
+	var value []interface{}
+	value = []interface{}{17, "kaeru", "2020-08-31"}
+	schema.MakePrimaryKey(value, &primaryKey)
+	schema.MakeUniqueKey(value, &uniqueKeys)
+	require.True(t, schema.IfKeyDuplicated(value, &primaryKey, &uniqueKeys))
+	value = []interface{}{17, "kaeru", "2020-08-17"}
+	schema.MakePrimaryKey(value, &primaryKey)
+	schema.MakeUniqueKey(value, &uniqueKeys)
+	require.True(t, schema.IfKeyDuplicated(value, &primaryKey, &uniqueKeys))
+	value = []interface{}{10, "kaeru", "2020-08-31"}
+	schema.MakePrimaryKey(value, &primaryKey)
+	schema.MakeUniqueKey(value, &uniqueKeys)
+	require.True(t, schema.IfKeyDuplicated(value, &primaryKey, &uniqueKeys))
+	value = []interface{}{10, "kaeru", "2020-08-17"}
+	schema.MakePrimaryKey(value, &primaryKey)
+	schema.MakeUniqueKey(value, &uniqueKeys)
+	require.False(t, schema.IfKeyDuplicated(value, &primaryKey, &uniqueKeys))
+	schema.AddPrimaryKey(primaryKey)
+	require.True(t, schema.IfKeyDuplicated(value, &primaryKey, &uniqueKeys))
 }

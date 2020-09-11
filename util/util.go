@@ -48,10 +48,11 @@ func RdName() string {
 }
 
 func RdBool() bool {
-	if rand.Intn(2) == 0 {
-		return true
-	}
-	return false
+	return rand.Intn(2) == 0
+}
+
+func RdBoolRatio(ratio float64) bool {
+	return rand.Float64() < ratio
 }
 
 func RdHash() string {

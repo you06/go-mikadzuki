@@ -6,6 +6,6 @@ type Global struct {
 
 func NewGlobal() Global {
 	return Global{
-		DependRatio: 0.2,
+		DependRatio: 0.4,
 	}
 }

@@ -25,8 +25,8 @@ var rootCmd = &cobra.Command{
 		}
 		manager := kv.NewManager(&cfg.Global)
 		generator := graph.NewGenerator(&manager, &cfg.Global, &cfg.Graph, &cfg.Depend)
-		graph := generator.NewGraph(2, 5)
-		graph.MakeLinearKV()
+		graph := generator.NewGraph(8, 14)
+		fmt.Println(graph.String())
 	},
 }
 
