@@ -183,6 +183,7 @@ func (g *Graph) ConnectTxnDepend(t1, a1, t2, a2 int, tp DependTp) {
 func (g *Graph) ConnectValueDepend(t1, a1, t2, a2 int, tp DependTp) {
 	from := g.GetTimeline(t1).GetAction(a1)
 	to := g.GetTimeline(t2).GetAction(a2)
+	fmt.Println(tp, "connect value depend from", t1, a1, "to", t2, a2, "success")
 	from.vOuts = append(from.vOuts, Depend{
 		tID: t2,
 		aID: a2,
@@ -211,6 +212,48 @@ func (g *Graph) countNoDependAction() int {
 	return cnt
 }
 
+func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) bool {
+	before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
+	if !before.knowValue {
+		return false
+	}
+	action.knowValue = true
+	txn := g.schema.KVs[before.kID].Begin()
+	util.AssertEQ(txn.KID, before.kID)
+	if action.tp.IsRead() {
+		action.kID = txn.KID
+		action.vID = before.vID
+		for _, t := range *txns {
+			if t.KID == txn.KID {
+				action.vID = t.Latest
+				return true
+			}
+		}
+		txn.Latest = before.vID
+		txns.Push(txn)
+	} else if action.tp.IsWrite() {
+		action.knowValue = true
+		switch action.tp {
+		case Insert:
+			// may use the old index value to make it a real dependency
+			kv := g.schema.NewKV()
+			txn = kv.Begin()
+			txn.NewValue(g.schema)
+		case Update:
+			txn.PutValue(g.schema)
+		case Delete:
+			txn.DelValue(g.schema)
+		}
+		action.kID = txn.KID
+		action.vID = txn.Latest
+		txns.Push(txn)
+	} else {
+		panic("unreachable")
+	}
+	return true
+}
+
+// MakeLinearKV assign values for actions via value dependencies
 func (g *Graph) MakeLinearKV() {
 	ts := len(g.timelines)
 	progress := make([]int, ts)
@@ -263,6 +306,10 @@ func (g *Graph) MakeLinearKV() {
 
 	// txnsStore keeps transaction breaks by dependency in generation
 	txnsStore := make(map[int]*kv.Txns)
+	waitActions := make([]map[int]struct{}, ts)
+	for i := 0; i < ts; i++ {
+		waitActions[i] = make(map[int]struct{})
+	}
 	for {
 		done := true
 		for i := 0; i < ts; i++ {
@@ -277,50 +324,39 @@ func (g *Graph) MakeLinearKV() {
 				txns = kv.Txns([]*kv.Txn{initKVs[i].Begin()})
 				txnsStore[i] = &txns
 			}
+			if len(waitActions[i]) != 0 {
+				var doneActionsIDs []int
+				for id := range waitActions[i] {
+					action := timeline.GetAction(id)
+					// although we can suppose the txn added here is never used again
+					// but add txn into txns break the internal order
+					if g.getValueFromDepend(action, &txns) {
+						doneActionsIDs = append(doneActionsIDs, id)
+					}
+				}
+				for _, id := range doneActionsIDs {
+					delete(waitActions[i], id)
+				}
+				if len(waitActions[i]) == 0 {
+					delete(txnsStore, i)
+				}
+				continue
+			}
 			for {
 				progress[i] += 1
 				action := timeline.GetAction(progress[i])
 				if action.tp == Commit {
 					txns.Commit()
-					delete(txnsStore, i)
 					break
 				} else if action.tp == Rollback {
 					txns.Rollback()
-					delete(txnsStore, i)
 					break
 				} else if len(action.vIns) > 0 {
-					before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
-					if !before.knowValue {
+					if !g.getValueFromDepend(action, &txns) {
 						// this should be retry in next loop
-						progress[i] -= 1
-						break
+						waitActions[i][progress[i]] = struct{}{}
+						continue
 					}
-					action.knowValue = true
-					txn := g.schema.KVs[before.kID].Begin()
-					util.AssertEQ(txn.KID, before.kID)
-					if action.tp.IsRead() {
-						action.kID = txn.KID
-						action.vID = before.vID
-					} else if action.tp.IsWrite() {
-						action.knowValue = true
-						switch action.tp {
-						case Insert:
-							// may use the old index value to make it a real dependency
-							kv := g.schema.NewKV()
-							txn = kv.Begin()
-							txns.Push(txn)
-							txn.NewValue(g.schema)
-						case Update:
-							txn.PutValue(g.schema)
-						case Delete:
-							txn.DelValue(g.schema)
-						}
-						action.kID = txn.KID
-						action.vID = txn.Latest
-					} else {
-						panic("unreachable")
-					}
-					txns.Push(txn)
 				} else {
 					txn := txns.Rand()
 					if action.tp.IsRead() {
@@ -347,6 +383,9 @@ func (g *Graph) MakeLinearKV() {
 				}
 			}
 			done = false
+			if len(waitActions[i]) == 0 {
+				delete(txnsStore, i)
+			}
 		}
 		if done {
 			break
