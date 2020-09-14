@@ -11,6 +11,7 @@ func TestDefaultConfig(t *testing.T) {
 	// global fields
 	require.Equal(t, config.Global.DSN, "root:@tcp(172.17.0.1:4000)/")
 	require.Equal(t, config.Global.Database, "mikadzuki")
+	require.Equal(t, config.Global.Target, "mysql")
 	require.Equal(t, config.Global.Thread, 8)
 	require.Equal(t, config.Global.Action, 20)
 	// graph fields
@@ -34,6 +35,7 @@ func TestLoadConfig(t *testing.T) {
 	// global fields
 	require.Equal(t, config.Global.DSN, "root:@tcp(172.17.0.1:3306)/")
 	require.Equal(t, config.Global.Database, "test")
+	require.Equal(t, config.Global.Target, "tidb")
 	require.Equal(t, config.Global.Thread, 4)
 	require.Equal(t, config.Global.Action, 10)
 	// graph fields

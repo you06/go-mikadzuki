@@ -41,7 +41,7 @@ func NewKV(id int) KV {
 	return KV{
 		ID:     id,
 		Values: make(map[int]struct{}),
-		Latest: -1,
+		Latest: NULL_VALUE_ID,
 	}
 }
 

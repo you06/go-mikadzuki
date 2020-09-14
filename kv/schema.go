@@ -40,9 +40,9 @@ type Column struct {
 
 func (s *Schema) AddColumn(mustPrimary bool) {
 	tp := RdType()
-	null := mustPrimary || util.RdBool()
+	notnull := mustPrimary || util.RdBool()
 	primary := mustPrimary
-	if null && !mustPrimary {
+	if notnull && !mustPrimary {
 		primary = util.RdBoolRatio(PRIMARY_RATIO)
 	}
 	if primary {
@@ -52,7 +52,7 @@ func (s *Schema) AddColumn(mustPrimary bool) {
 		Name:    fmt.Sprintf("col_%d", len(s.Columns)),
 		Tp:      tp,
 		Size:    tp.Size(),
-		Null:    null,
+		Null:    !notnull,
 		Primary: primary,
 	}
 	s.Columns = append(s.Columns, column)
@@ -291,6 +291,9 @@ func (s *Schema) DeleteValue(vID int) {
 }
 
 func (s *Schema) SelectSQL(id int) string {
+	if id == -1 {
+		return fmt.Sprintf("SELECT * FROM %s WHERE 0", s.TableName())
+	}
 	data := s.Data[id]
 	var b strings.Builder
 	fmt.Fprintf(&b, "SELECT * FROM %s WHERE ", s.TableName())
@@ -311,6 +314,9 @@ func (s *Schema) SelectSQL(id int) string {
 }
 
 func (s *Schema) UpdateSQL(oldID, newID int) string {
+	if oldID == -1 {
+		return s.ReplaceSQL(newID)
+	}
 	oldData, newData := s.Data[oldID], s.Data[newID]
 	var b strings.Builder
 	fmt.Fprintf(&b, "UPDATE %s SET ", s.TableName())
@@ -343,6 +349,9 @@ func (s *Schema) UpdateSQL(oldID, newID int) string {
 }
 
 func (s *Schema) DeleteSQL(id int) string {
+	if id == -1 {
+		return fmt.Sprintf("DELETE FROM %s WHERE 0", s.TableName())
+	}
 	data := s.Data[id]
 	var b strings.Builder
 	fmt.Fprintf(&b, "DELETE FROM %s WHERE ", s.TableName())
@@ -366,6 +375,20 @@ func (s *Schema) InsertSQL(id int) string {
 	data := s.Data[id]
 	var b strings.Builder
 	fmt.Fprintf(&b, "INSERT INTO %s VALUES(", s.TableName())
+	for i, item := range data {
+		if i != 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(s.Columns[i].Tp.ValToString(item))
+	}
+	b.WriteString(")")
+	return b.String()
+}
+
+func (s *Schema) ReplaceSQL(id int) string {
+	data := s.Data[id]
+	var b strings.Builder
+	fmt.Fprintf(&b, "REPLACE INTO %s VALUES(", s.TableName())
 	for i, item := range data {
 		if i != 0 {
 			b.WriteString(", ")

@@ -26,7 +26,7 @@ var rootCmd = &cobra.Command{
 			panic(err)
 		}
 		mgr := manager.NewManager(&cfg)
-		ctx, cancel := context.WithCancel(context.Background())
+		_, cancel := context.WithCancel(context.Background())
 		go func() {
 			sc := make(chan os.Signal, 1)
 			signal.Notify(sc,
@@ -41,7 +41,8 @@ var rootCmd = &cobra.Command{
 			cancel()
 			os.Exit(0)
 		}()
-		mgr.Run(ctx)
+		// mgr.Run(ctx)
+		fmt.Println(mgr.Once())
 
 		//
 		//generator := graph.NewGenerator(&manager, &cfg.Global, &cfg.Graph, &cfg.Depend)

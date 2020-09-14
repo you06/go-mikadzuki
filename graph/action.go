@@ -2,8 +2,9 @@ package graph
 
 import (
 	"fmt"
-	"github.com/you06/go-mikadzuki/kv"
 	"strings"
+
+	"github.com/you06/go-mikadzuki/kv"
 )
 
 type Action struct {
@@ -26,6 +27,7 @@ type Action struct {
 	vID       int
 	knowValue bool
 	SQL       string
+	ifExec    bool
 }
 
 type ActionTp string
@@ -84,6 +86,8 @@ func NewAction(id, tID int, tp ActionTp) Action {
 		vIns:      []Depend{},
 		knowValue: false,
 		vID:       kv.INVALID_VALUE_ID,
+		SQL:       "",
+		ifExec:    false,
 	}
 }
 

@@ -112,6 +112,10 @@ func (d DataType) RandValue() interface{} {
 
 // use default size by now
 func (d DataType) Size() int {
+	switch d {
+	case Varchar:
+		return 511
+	}
 	return 0
 }
 
