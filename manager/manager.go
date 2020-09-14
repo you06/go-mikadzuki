@@ -56,10 +56,11 @@ func (m *Manager) Once() error {
 	}
 	txns := make([]db.Txn, m.cfg.Global.Thread)
 
-	if err := g.IterateGraph(func(tID int, tp graph.ActionTp, sqlStmt string) (*sql.Result, error) {
+	if err := g.IterateGraph(func(tID int, tp graph.ActionTp, sqlStmt string) (*sql.Rows, *sql.Result, error) {
 		var (
-			res *sql.Result
-			err error
+			rows *sql.Rows
+			res  *sql.Result
+			err  error
 		)
 		switch tp {
 		case graph.Begin:
@@ -70,14 +71,20 @@ func (m *Manager) Once() error {
 		case graph.Rollback:
 			err = txns[tID].Rollback()
 			txns[tID] = nil
+		case graph.Select:
+			txn := txns[tID]
+			if txn == nil {
+				return nil, nil, errors.New("txn is nil")
+			}
+			rows, err = txns[tID].Query(sqlStmt)
 		default:
 			txn := txns[tID]
 			if txn == nil {
-				return nil, errors.New("txn is nil")
+				return nil, nil, errors.New("txn is nil")
 			}
 			res, err = txn.Exec(sqlStmt)
 		}
-		return res, err
+		return rows, res, err
 	}); err != nil {
 		return err
 	}
@@ -94,6 +101,10 @@ func (m *Manager) initDB() error {
 		return errors.Trace(err)
 	}
 	dbname := m.cfg.Global.Database
+	_, err = m.db.Exec(`SET @@GLOBAL.SQL_MODE="NO_ENGINE_SUBSTITUTION"`)
+	if err != nil {
+		return errors.Trace(err)
+	}
 	_, err = m.db.Exec(fmt.Sprintf("DROP DATABASE %s", dbname))
 	if err != nil && !strings.Contains(err.Error(), "database doesn't exist") {
 		return errors.Trace(err)

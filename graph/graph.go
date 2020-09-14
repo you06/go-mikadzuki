@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"time"
 
 	"github.com/juju/errors"
 	"github.com/you06/go-mikadzuki/kv"
@@ -12,6 +13,7 @@ import (
 )
 
 const MAX_RETRY = 10
+const WAIT_TIME = 5 * time.Millisecond
 
 // Graph is the dependencies graph
 // all the timelines should begin with `Begin` and end with `Commit` or `Rollback`
@@ -230,7 +232,6 @@ func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool
 		return nil, false
 	}
 	action.knowValue = true
-	g.PushOrder(action.tID, action.id)
 	txn := g.schema.KVs[before.kID].Begin()
 	util.AssertEQ(txn.KID, before.kID)
 	if action.tp.IsRead() {
@@ -293,7 +294,6 @@ func (g *Graph) MakeLinearKV() {
 		for {
 			action := timeline.GetAction(progress[i])
 			action.knowValue = true
-			g.PushOrder(i, progress[i])
 			if action.tp == Commit {
 				txns.Commit()
 				break
@@ -375,12 +375,10 @@ func (g *Graph) MakeLinearKV() {
 				progress[i] += 1
 				action := timeline.GetAction(progress[i])
 				if action.tp == Commit {
-					g.PushOrder(i, progress[i])
 					txns.Commit()
 					txnStatus[i] = Commit
 					break
 				} else if action.tp == Rollback {
-					g.PushOrder(i, progress[i])
 					txns.Rollback()
 					txnStatus[i] = Rollback
 					break
@@ -391,11 +389,9 @@ func (g *Graph) MakeLinearKV() {
 						continue
 					} else {
 						util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
-						g.PushOrder(i, progress[i])
 						txns.Push(t)
 					}
 				} else {
-					g.PushOrder(i, progress[i])
 					txn := txns.Rand()
 					if action.tp.IsRead() {
 						action.kID = txn.KID
@@ -451,20 +447,56 @@ func (g *Graph) MakeLinearKV() {
 	}
 }
 
-func (g *Graph) IterateGraph(exec func(tID int, tp ActionTp, sqlStmt string) (*sql.Result, error)) error {
-	var (
-		// res    *sql.Result
-		err    error
-		action *Action
-	)
-	for _, loc := range g.order {
-		action = g.GetTimeline(loc.tID).GetAction(loc.aID)
-		_, err = exec(loc.tID, action.tp, action.SQL)
-		if err != nil {
+func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.Result, error)) error {
+	errCh := make(chan error)
+	doneCh := make(chan struct{})
+	for i := 0; i < len(g.timelines); i++ {
+		go func(i int) {
+			var (
+				rows   *sql.Rows
+				err    error
+				action *Action
+			)
+			timeline := g.GetTimeline(i)
+			for j := 0; j < len(timeline.actions); j++ {
+				action = timeline.GetAction(j)
+				for _, depend := range action.ins {
+					for !g.GetTimeline(depend.tID).GetAction(depend.aID).ifExec {
+						time.Sleep(WAIT_TIME)
+					}
+				}
+				rows, _, err = exec(i, action.tp, action.SQL)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				switch action.tp {
+				case Select:
+					if same, err := g.schema.CompareData(action.vID, rows); !same {
+						errCh <- fmt.Errorf("%s got %s", action.SQL, err.Error())
+					}
+				}
+				action.ifExec = true
+			}
+			// check if all done
+			for i := 0; i < len(g.timelines); i++ {
+				timeline := g.GetTimeline(i)
+				if !timeline.GetAction(len(timeline.actions) - 1).ifExec {
+					return
+				}
+			}
+			doneCh <- struct{}{}
+		}(i)
+	}
+
+	for {
+		select {
+		case err := <-errCh:
 			return err
+		case <-doneCh:
+			return nil
 		}
 	}
-	return nil
 }
 
 func (g *Graph) String() string {

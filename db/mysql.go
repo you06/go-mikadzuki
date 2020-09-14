@@ -46,6 +46,11 @@ func (m *MySQLTxn) Exec(sql string) (*sql.Result, error) {
 	return &r, errors.Trace(err)
 }
 
+func (m *MySQLTxn) Query(sql string) (*sql.Rows, error) {
+	r, err := m.txn.Query(sql)
+	return r, err
+}
+
 func (m *MySQLTxn) Commit() error {
 	return errors.Trace(m.txn.Commit())
 }

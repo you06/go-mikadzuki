@@ -8,9 +8,12 @@ import (
 )
 
 var (
-	TIME_MIN   = time.Date(1970, 1, 0, 0, 0, 1, 0, time.UTC).Unix()
-	TIME_MAX   = time.Date(2100, 1, 0, 0, 0, 0, 0, time.UTC).Unix()
+	TIME_MIN   = time.Date(1000, 1, 1, 0, 0, 0, 0, time.UTC).Unix()
+	TIME_MAX   = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC).Unix()
 	TIME_DELTA = TIME_MAX - TIME_MIN
+	TS_MIN     = time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC).Unix()
+	TS_MAX     = time.Date(2038, 1, 19, 3, 14, 7, 0, time.UTC).Unix()
+	TS_DELTA   = TS_MAX - TS_MIN
 	HASH_LEN   = 10
 )
 
@@ -41,6 +44,11 @@ func RdDate() string {
 
 func RdDateTime() string {
 	return RdMoment().Format("2006-01-02 15:04:05")
+}
+
+func RdTimestamp() string {
+	sec := rand.Int63n(TS_DELTA) + TS_MIN
+	return time.Unix(sec, 0).Format("2006-01-02 15:04:05")
 }
 
 func RdName() string {

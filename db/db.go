@@ -10,6 +10,7 @@ type DB interface {
 
 type Txn interface {
 	Exec(string) (*sql.Result, error)
+	Query(string) (*sql.Rows, error)
 	Commit() error
 	Rollback() error
 }

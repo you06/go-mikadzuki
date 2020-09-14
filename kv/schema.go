@@ -1,6 +1,8 @@
 package kv
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -397,4 +399,29 @@ func (s *Schema) ReplaceSQL(id int) string {
 	}
 	b.WriteString(")")
 	return b.String()
+}
+
+func (s *Schema) CompareData(vID int, rows *sql.Rows) (bool, error) {
+	data, err := ParseFromSQLResult(rows)
+	if err != nil {
+		return false, err
+	}
+	if vID == NULL_VALUE_ID {
+		if len(data) != 0 {
+			return false, fmt.Errorf("expect read nothing, but got %d rows", len(data))
+		}
+		return true, nil
+	}
+	correct := s.Data[vID]
+	if len(data) != 1 {
+		return false, errors.New("data length not 1")
+	}
+
+	for i, column := range s.Columns {
+		left, right := data[0][i].ValString, column.Tp.ValToPureString(correct[i])
+		if left != right {
+			return false, fmt.Errorf("expect %s, got %s", left, right)
+		}
+	}
+	return true, nil
 }
