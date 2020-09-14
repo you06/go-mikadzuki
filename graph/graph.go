@@ -237,16 +237,18 @@ func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool
 	if action.tp.IsRead() {
 		action.kID = txn.KID
 		action.vID = before.vID
-		if before.vID == kv.INVALID_VALUE_ID {
-			fmt.Println("[R] read invalid value from depend")
-		}
-		for _, t := range *txns {
-			if t.KID == txn.KID {
-				if t.Latest == kv.INVALID_VALUE_ID {
-					fmt.Println("[R] read invalid value from inner")
+		util.AssertNE(before.vID, kv.INVALID_VALUE_ID)
+		// there we should consider internal read first
+		timeline := g.GetTimeline(action.tID)
+		for i := action.id - 1; i >= 0; i-- {
+			internal := timeline.GetAction(i)
+			if internal.tp == Begin {
+				break
+			} else if internal.tp.IsWrite() {
+				if internal.kID == txn.KID {
+					action.vID = internal.vID
+					return txn, true
 				}
-				action.vID = t.Latest
-				return txn, true
 			}
 		}
 		txn.Latest = before.vID
@@ -263,10 +265,7 @@ func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool
 		case Delete:
 			action.SQL = txn.DelValue(g.schema)
 		}
-		if txn.Latest == kv.INVALID_VALUE_ID {
-			fmt.Println("[W] read invalid value from depend")
-		}
-		fmt.Printf("[W] assign value to %d, %d\n", action.tID, action.id)
+		util.AssertNE(txn.Latest, kv.INVALID_VALUE_ID)
 		action.kID = before.kID
 		action.vID = txn.Latest
 		txns.Push(txn)
@@ -424,17 +423,12 @@ func (g *Graph) MakeLinearKV() {
 		}
 	}
 
-	fmt.Println(g.String())
-
 	// generate all select SQLs and check if there are invalid value ids
 	for i := 0; i < ts; i++ {
 		timeline := g.GetTimeline(i)
 		as := len(timeline.actions)
 		for j := 0; j < as; j++ {
 			action := timeline.GetAction(j)
-			// if action == nil {
-			// 	fmt.Println()
-			// }
 			if action.tp.IsWrite() {
 				util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
 			} else if action.tp.IsRead() {
@@ -442,12 +436,21 @@ func (g *Graph) MakeLinearKV() {
 				case Select:
 					action.SQL = g.schema.SelectSQL(action.vID)
 				}
+			} else {
+				switch action.tp {
+				case Begin:
+					action.SQL = "BEGIN"
+				case Commit:
+					action.SQL = "COMMIT"
+				case Rollback:
+					action.SQL = "ROLLBACK"
+				}
 			}
 		}
 	}
 }
 
-func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.Result, error)) error {
+func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *sql.Result, error)) error {
 	errCh := make(chan error)
 	doneCh := make(chan struct{})
 	for i := 0; i < len(g.timelines); i++ {
@@ -465,7 +468,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 						time.Sleep(WAIT_TIME)
 					}
 				}
-				rows, _, err = exec(i, action.tp, action.SQL)
+				rows, _, err = exec(i, action.id, action.tp, action.SQL)
 				if err != nil {
 					errCh <- err
 					return

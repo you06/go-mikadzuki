@@ -6,6 +6,7 @@ type Global struct {
 	Target   string `toml:"target"`
 	Thread   int    `toml:"thread"`
 	Action   int    `toml:"action"`
+	LogPath  string `toml:"log-path"`
 }
 
 func NewGlobal() Global {
@@ -15,5 +16,6 @@ func NewGlobal() Global {
 		Target:   "mysql",
 		Thread:   8,
 		Action:   20,
+		LogPath:  "",
 	}
 }

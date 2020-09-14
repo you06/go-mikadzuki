@@ -6,7 +6,7 @@ import (
 )
 
 type Config struct {
-	Global Global `toml:global`
+	Global Global `toml:"global"`
 	Graph  Graph  `toml:"graph"`
 	Depend Depend `toml:"depend"`
 }

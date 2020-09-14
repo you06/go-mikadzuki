@@ -4,6 +4,7 @@ database = "test"
 target = "tidb"
 thread = 4
 action = 10
+log-path = "./logs"
 
 [graph]
 begin = 2
