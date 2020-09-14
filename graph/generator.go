@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"fmt"
 	"math/rand"
 
 	"github.com/you06/go-mikadzuki/config"
@@ -19,11 +18,11 @@ type Generator struct {
 	kvManager    *kv.Manager
 }
 
-func NewGenerator(kvManager *kv.Manager, global *config.Global, graph *config.Graph, depend *config.Depend) Generator {
+func NewGenerator(kvManager *kv.Manager, cfg *config.Config) Generator {
 	generator := Generator{
-		globalConfig: global,
-		graphConfig:  graph,
-		dependConfig: depend,
+		globalConfig: &cfg.Global,
+		graphConfig:  &cfg.Graph,
+		dependConfig: &cfg.Depend,
 		graphSum:     0,
 		dependSum:    0,
 		kvManager:    kvManager,
@@ -80,7 +79,6 @@ func (g *Generator) randDependTp() DependTp {
 func (g *Generator) NewGraph(conn, length int) Graph {
 	g.kvManager.Reset()
 	graph := NewGraph(g.kvManager)
-	fmt.Println("make graph")
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
 		var (
@@ -108,9 +106,7 @@ func (g *Generator) NewGraph(conn, length int) Graph {
 			beforeTp = tp
 		}
 	}
-	fmt.Println("make dependency")
-	// noDepend := graph.countNoDependAction()
-	// connectCnt := int(float64(noDepend) * g.globalConfig.DependRatio / 2)
+	// we add dependency as more as possible
 	failedCnt := 0
 OUTER:
 	for {
@@ -126,10 +122,6 @@ OUTER:
 			}
 		}
 	}
-	// for i := 0; i < connectCnt; i++ {
-	// 	_ = graph.AddDependency(g.randDependTp())
-	// }
-	fmt.Println("make linear kv")
 	graph.MakeLinearKV()
 	return graph
 }

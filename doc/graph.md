@@ -42,7 +42,7 @@ In this process, the difference of isolation levels between databases must be co
 
 As the transaction is atomic, it should be treating as a whole, the following cases:
 
-This is a value dependency graph, there is a cycle in it, but we cannot infer that this transaction is invalid. Let `t2` start before `t1`'s commit then read action can get the old value.
+This is a value dependency graph, there is a cycle in it, but we cannot infer that this transaction is invalid. If `t2` starts before `t1`'s commit, then it's read action can get the old value.
 
 ```text
 r(1, 1)

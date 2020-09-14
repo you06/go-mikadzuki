@@ -1,11 +1,19 @@
 package config
 
 type Global struct {
-	DependRatio float64 `toml:"depend-ratio"`
+	DSN      string `toml:"dsn"`
+	Database string `toml:"database"`
+	Target   string `toml:"target"`
+	Thread   int    `toml:"thread"`
+	Action   int    `toml:"action"`
 }
 
 func NewGlobal() Global {
 	return Global{
-		DependRatio: 0.4,
+		DSN:      "root:@tcp(172.17.0.1:4000)/",
+		Database: "mikadzuki",
+		Target:   "mysql",
+		Thread:   8,
+		Action:   20,
 	}
 }

@@ -1,9 +1,11 @@
 package graph
 
 import (
+	"database/sql"
 	"fmt"
 	"math/rand"
 	"strings"
+	"time"
 
 	"github.com/juju/errors"
 	"github.com/you06/go-mikadzuki/kv"
@@ -11,6 +13,7 @@ import (
 )
 
 const MAX_RETRY = 10
+const WAIT_TIME = 5 * time.Millisecond
 
 // Graph is the dependencies graph
 // all the timelines should begin with `Begin` and end with `Commit` or `Rollback`
@@ -20,6 +23,12 @@ type Graph struct {
 	timelines  []Timeline
 	dependency int
 	schema     *kv.Schema
+	order      []ActionLoc
+}
+
+type ActionLoc struct {
+	tID int
+	aID int
 }
 
 func NewGraph(kvManager *kv.Manager) Graph {
@@ -28,6 +37,7 @@ func NewGraph(kvManager *kv.Manager) Graph {
 		timelines:  []Timeline{},
 		dependency: 0,
 		schema:     kvManager.NewSchema(),
+		order:      []ActionLoc{},
 	}
 }
 
@@ -212,10 +222,14 @@ func (g *Graph) countNoDependAction() int {
 	return cnt
 }
 
-func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) bool {
+func (g *Graph) PushOrder(tID, aID int) {
+	g.order = append(g.order, ActionLoc{tID, aID})
+}
+
+func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool) {
 	before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
 	if !before.knowValue {
-		return false
+		return nil, false
 	}
 	action.knowValue = true
 	txn := g.schema.KVs[before.kID].Begin()
@@ -223,36 +237,44 @@ func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) bool {
 	if action.tp.IsRead() {
 		action.kID = txn.KID
 		action.vID = before.vID
+		if before.vID == kv.INVALID_VALUE_ID {
+			fmt.Println("[R] read invalid value from depend")
+		}
 		for _, t := range *txns {
 			if t.KID == txn.KID {
+				if t.Latest == kv.INVALID_VALUE_ID {
+					fmt.Println("[R] read invalid value from inner")
+				}
 				action.vID = t.Latest
-				return true
+				return txn, true
 			}
 		}
 		txn.Latest = before.vID
 		txns.Push(txn)
 	} else if action.tp.IsWrite() {
-		action.knowValue = true
-		var sql string
 		switch action.tp {
 		case Insert:
 			// may use the old index value to make it a real dependency
 			kv := g.schema.NewKV()
 			txn = kv.Begin()
-			sql = txn.NewValue(g.schema)
+			action.SQL = txn.NewValue(g.schema)
 		case Update:
-			sql = txn.PutValue(g.schema)
+			action.SQL = txn.PutValue(g.schema)
 		case Delete:
-			sql = txn.DelValue(g.schema)
+			action.SQL = txn.DelValue(g.schema)
 		}
-		action.kID = txn.KID
+		if txn.Latest == kv.INVALID_VALUE_ID {
+			fmt.Println("[W] read invalid value from depend")
+		}
+		fmt.Printf("[W] assign value to %d, %d\n", action.tID, action.id)
+		action.kID = before.kID
 		action.vID = txn.Latest
-		action.SQL = sql
 		txns.Push(txn)
 	} else {
 		panic("unreachable")
 	}
-	return true
+	util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
+	return txn, true
 }
 
 // MakeLinearKV assign values for actions via value dependencies
@@ -287,17 +309,13 @@ func (g *Graph) MakeLinearKV() {
 						txn = g.schema.NewKV().Begin()
 					}
 					action.SQL = txn.NewValue(g.schema)
-					action.kID = txn.KID
-					action.vID = txn.Latest
 				case Update:
 					action.SQL = txn.PutValue(g.schema)
-					action.kID = txn.KID
-					action.vID = txn.Latest
 				case Delete:
 					action.SQL = txn.DelValue(g.schema)
-					action.kID = txn.KID
-					action.vID = txn.Latest
 				}
+				action.kID = txn.KID
+				action.vID = txn.Latest
 			} else if action.tp.IsRead() {
 				action.kID = txn.KID
 				action.vID = txn.Latest
@@ -312,13 +330,11 @@ func (g *Graph) MakeLinearKV() {
 	for i := 0; i < ts; i++ {
 		waitActions[i] = make(map[int]struct{})
 	}
+	txnStatus := make([]ActionTp, ts)
 	for {
 		done := true
 		for i := 0; i < ts; i++ {
 			timeline := g.GetTimeline(i)
-			if progress[i] == timeline.allocID-1 {
-				continue
-			}
 			var txns kv.Txns
 			if t, ok := txnsStore[i]; ok {
 				txns = *t
@@ -332,8 +348,15 @@ func (g *Graph) MakeLinearKV() {
 					action := timeline.GetAction(id)
 					// although we can suppose the txn added here is never used again
 					// but add txn into txns break the internal order
-					if g.getValueFromDepend(action, &txns) {
+					if _, ok := g.getValueFromDepend(action, &txns); ok {
 						doneActionsIDs = append(doneActionsIDs, id)
+						// switch txnStatus[i] {
+						// case Commit:
+						// 	t.Commit()
+						// case Rollback:
+						// 	t.Rollback()
+						// }
+						util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
 					}
 				}
 				for _, id := range doneActionsIDs {
@@ -342,6 +365,10 @@ func (g *Graph) MakeLinearKV() {
 				if len(waitActions[i]) == 0 {
 					delete(txnsStore, i)
 				}
+				done = false
+				continue
+			}
+			if progress[i] == timeline.allocID-1 {
 				continue
 			}
 			for {
@@ -349,15 +376,20 @@ func (g *Graph) MakeLinearKV() {
 				action := timeline.GetAction(progress[i])
 				if action.tp == Commit {
 					txns.Commit()
+					txnStatus[i] = Commit
 					break
 				} else if action.tp == Rollback {
 					txns.Rollback()
+					txnStatus[i] = Rollback
 					break
 				} else if len(action.vIns) > 0 {
-					if !g.getValueFromDepend(action, &txns) {
+					if t, ok := g.getValueFromDepend(action, &txns); !ok {
 						// this should be retry in next loop
 						waitActions[i][progress[i]] = struct{}{}
 						continue
+					} else {
+						util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
+						txns.Push(t)
 					}
 				} else {
 					txn := txns.Rand()
@@ -371,35 +403,38 @@ func (g *Graph) MakeLinearKV() {
 							txn = kv.Begin()
 							txns.Push(txn)
 							action.SQL = txn.NewValue(g.schema)
-							action.kID = txn.KID
-							action.vID = txn.Latest
 						case Update:
 							action.SQL = txn.PutValue(g.schema)
-							action.vID = txn.Latest
 						case Delete:
 							action.SQL = txn.DelValue(g.schema)
-							action.vID = txn.Latest
 						}
+						action.kID = txn.KID
+						action.vID = txn.Latest
 					}
 					action.knowValue = true
 				}
 			}
-			done = false
 			if len(waitActions[i]) == 0 {
 				delete(txnsStore, i)
 			}
+			done = false
 		}
 		if done {
 			break
 		}
 	}
 
+	fmt.Println(g.String())
+
 	// generate all select SQLs and check if there are invalid value ids
 	for i := 0; i < ts; i++ {
 		timeline := g.GetTimeline(i)
 		as := len(timeline.actions)
 		for j := 0; j < as; j++ {
-			action := timeline.GetAction(as)
+			action := timeline.GetAction(j)
+			// if action == nil {
+			// 	fmt.Println()
+			// }
 			if action.tp.IsWrite() {
 				util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
 			} else if action.tp.IsRead() {
@@ -408,6 +443,58 @@ func (g *Graph) MakeLinearKV() {
 					action.SQL = g.schema.SelectSQL(action.vID)
 				}
 			}
+		}
+	}
+}
+
+func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.Result, error)) error {
+	errCh := make(chan error)
+	doneCh := make(chan struct{})
+	for i := 0; i < len(g.timelines); i++ {
+		go func(i int) {
+			var (
+				rows   *sql.Rows
+				err    error
+				action *Action
+			)
+			timeline := g.GetTimeline(i)
+			for j := 0; j < len(timeline.actions); j++ {
+				action = timeline.GetAction(j)
+				for _, depend := range action.ins {
+					for !g.GetTimeline(depend.tID).GetAction(depend.aID).ifExec {
+						time.Sleep(WAIT_TIME)
+					}
+				}
+				rows, _, err = exec(i, action.tp, action.SQL)
+				if err != nil {
+					errCh <- err
+					return
+				}
+				switch action.tp {
+				case Select:
+					if same, err := g.schema.CompareData(action.vID, rows); !same {
+						errCh <- fmt.Errorf("%s got %s", action.SQL, err.Error())
+					}
+				}
+				action.ifExec = true
+			}
+			// check if all done
+			for i := 0; i < len(g.timelines); i++ {
+				timeline := g.GetTimeline(i)
+				if !timeline.GetAction(len(timeline.actions) - 1).ifExec {
+					return
+				}
+			}
+			doneCh <- struct{}{}
+		}(i)
+	}
+
+	for {
+		select {
+		case err := <-errCh:
+			return err
+		case <-doneCh:
+			return nil
 		}
 	}
 }
@@ -421,4 +508,8 @@ func (g *Graph) String() string {
 		b.WriteString(t.String())
 	}
 	return b.String()
+}
+
+func (g *Graph) GetSchemas() []string {
+	return []string{g.schema.CreateTable()}
 }

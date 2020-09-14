@@ -96,7 +96,7 @@ func (d DataType) RandValue() interface{} {
 	case Datetime:
 		return util.RdDateTime()
 	case Timestamp:
-		return util.RdDateTime()
+		return util.RdTimestamp()
 	case Char:
 		return util.RdName()
 	case Varchar:
@@ -112,6 +112,12 @@ func (d DataType) RandValue() interface{} {
 
 // use default size by now
 func (d DataType) Size() int {
+	switch d {
+	case Varchar:
+		return util.RdRange(127, 511)
+	case Char:
+		return util.RdRange(31, 255)
+	}
 	return 0
 }
 
@@ -142,6 +148,22 @@ func (d DataType) ValToString(data interface{}) string {
 		return strconv.Itoa(data.(int))
 	case Date, Datetime, Timestamp, Char, Varchar, Text:
 		return fmt.Sprintf(`"%s"`, data.(string))
+	default:
+		panic(fmt.Sprintf("unimplement type %s", d))
+	}
+}
+
+func (d DataType) ValToPureString(data interface{}) string {
+	// null value will not lead to duplicated unique key
+	// here we use random hash string to avoid it
+	if _, ok := data.(Null); ok {
+		return "NULL"
+	}
+	switch d {
+	case TinyInt, Int, BigInt:
+		return strconv.Itoa(data.(int))
+	case Date, Datetime, Timestamp, Char, Varchar, Text:
+		return data.(string)
 	default:
 		panic(fmt.Sprintf("unimplement type %s", d))
 	}
