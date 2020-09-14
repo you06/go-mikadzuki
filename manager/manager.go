@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/juju/errors"
-
 	"github.com/you06/go-mikadzuki/config"
 	"github.com/you06/go-mikadzuki/db"
 	"github.com/you06/go-mikadzuki/graph"
 	"github.com/you06/go-mikadzuki/kv"
+
+	"github.com/juju/errors"
 )
 
 type Manager struct {
@@ -48,6 +48,7 @@ func (m *Manager) Once() error {
 		return err
 	}
 	g := m.graphMgr.NewGraph(m.cfg.Global.Thread, m.cfg.Global.Action)
+	logs := NewExecutionLog(m.cfg.Global.Thread, m.cfg.Global.Action)
 	for _, stmt := range g.GetSchemas() {
 		fmt.Println(stmt)
 		if _, err := m.db.Exec(stmt); err != nil {
@@ -56,12 +57,13 @@ func (m *Manager) Once() error {
 	}
 	txns := make([]db.Txn, m.cfg.Global.Thread)
 
-	if err := g.IterateGraph(func(tID int, tp graph.ActionTp, sqlStmt string) (*sql.Rows, *sql.Result, error) {
+	if err := g.IterateGraph(func(tID, aID int, tp graph.ActionTp, sqlStmt string) (*sql.Rows, *sql.Result, error) {
 		var (
 			rows *sql.Rows
 			res  *sql.Result
 			err  error
 		)
+		logs.LogStart(tID, aID, tp, sqlStmt)
 		switch tp {
 		case graph.Begin:
 			txns[tID], err = m.db.Begin()
@@ -74,19 +76,31 @@ func (m *Manager) Once() error {
 		case graph.Select:
 			txn := txns[tID]
 			if txn == nil {
-				return nil, nil, errors.New("txn is nil")
+				panic("txn is nil")
 			}
 			rows, err = txns[tID].Query(sqlStmt)
 		default:
 			txn := txns[tID]
 			if txn == nil {
-				return nil, nil, errors.New("txn is nil")
+				panic("txn is nil")
 			}
 			res, err = txn.Exec(sqlStmt)
 		}
+		if err == nil {
+			logs.LogSuccess(tID, aID)
+		} else {
+			logs.LogFail(tID, aID)
+		}
 		return rows, res, err
 	}); err != nil {
+		if m.cfg.Global.LogPath != "" {
+			m.DumpResult(&g, logs)
+		}
 		return err
+	} else {
+		if m.cfg.Global.LogPath != "" {
+			m.DumpResult(&g, logs)
+		}
 	}
 	if err := m.closeDB(); err != nil {
 		fmt.Println("close DB failed", err)

@@ -14,6 +14,7 @@ func TestDefaultConfig(t *testing.T) {
 	require.Equal(t, config.Global.Target, "mysql")
 	require.Equal(t, config.Global.Thread, 8)
 	require.Equal(t, config.Global.Action, 20)
+	require.Equal(t, config.Global.LogPath, "")
 	// graph fields
 	require.Equal(t, config.Graph.Begin, 20)
 	require.Equal(t, config.Graph.Commit, 20)
@@ -38,6 +39,7 @@ func TestLoadConfig(t *testing.T) {
 	require.Equal(t, config.Global.Target, "tidb")
 	require.Equal(t, config.Global.Thread, 4)
 	require.Equal(t, config.Global.Action, 10)
+	require.Equal(t, config.Global.LogPath, "./logs")
 	// graph fields
 	require.Equal(t, config.Graph.Begin, 2)
 	require.Equal(t, config.Graph.Commit, 2)
