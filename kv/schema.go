@@ -2,7 +2,6 @@ package kv
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -414,7 +413,7 @@ func (s *Schema) CompareData(vID int, rows *sql.Rows) (bool, error) {
 	}
 	correct := s.Data[vID]
 	if len(data) != 1 {
-		return false, errors.New("data length not 1")
+		return false, fmt.Errorf("data length %d, expect 1", len(data))
 	}
 
 	for i, column := range s.Columns {

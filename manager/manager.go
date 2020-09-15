@@ -49,6 +49,9 @@ func (m *Manager) Once() error {
 	}
 	g := m.graphMgr.NewGraph(m.cfg.Global.Thread, m.cfg.Global.Action)
 	logs := NewExecutionLog(m.cfg.Global.Thread, m.cfg.Global.Action)
+	if m.cfg.Global.LogPath != "" {
+		m.DumpGraph(&g)
+	}
 	for _, stmt := range g.GetSchemas() {
 		fmt.Println(stmt)
 		if _, err := m.db.Exec(stmt); err != nil {
@@ -86,20 +89,20 @@ func (m *Manager) Once() error {
 			}
 			res, err = txn.Exec(sqlStmt)
 		}
-		if err == nil {
-			logs.LogSuccess(tID, aID)
+		if err != nil {
+			logs.LogFail(tID, aID, err)
 		} else {
-			logs.LogFail(tID, aID)
+			logs.LogSuccess(tID, aID)
 		}
 		return rows, res, err
 	}); err != nil {
 		if m.cfg.Global.LogPath != "" {
-			m.DumpResult(&g, logs)
+			m.DumpResult(logs)
 		}
 		return err
 	} else {
 		if m.cfg.Global.LogPath != "" {
-			m.DumpResult(&g, logs)
+			m.DumpResult(logs)
 		}
 	}
 	if err := m.closeDB(); err != nil {

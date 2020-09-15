@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/juju/errors"
@@ -331,6 +332,7 @@ func (g *Graph) MakeLinearKV() {
 	}
 	txnStatus := make([]ActionTp, ts)
 	for {
+		fmt.Println("loop1")
 		done := true
 		for i := 0; i < ts; i++ {
 			timeline := g.GetTimeline(i)
@@ -450,9 +452,11 @@ func (g *Graph) MakeLinearKV() {
 	}
 }
 
+// IterateGraph goes over the graph and exec it by given sequence
 func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *sql.Result, error)) error {
 	errCh := make(chan error)
 	doneCh := make(chan struct{})
+	var checkMutex sync.Mutex
 	for i := 0; i < len(g.timelines); i++ {
 		go func(i int) {
 			var (
@@ -465,6 +469,11 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 				action = timeline.GetAction(j)
 				for _, depend := range action.ins {
 					for !g.GetTimeline(depend.tID).GetAction(depend.aID).ifExec {
+						time.Sleep(WAIT_TIME)
+					}
+				}
+				for _, depend := range action.vIns {
+					for depend.tp == WW && !g.GetTimeline(depend.tID).GetAction(depend.aID).ifExec {
 						time.Sleep(WAIT_TIME)
 					}
 				}
@@ -482,6 +491,8 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 				action.ifExec = true
 			}
 			// check if all done
+			checkMutex.Lock()
+			defer checkMutex.Unlock()
 			for i := 0; i < len(g.timelines); i++ {
 				timeline := g.GetTimeline(i)
 				if !timeline.GetAction(len(timeline.actions) - 1).ifExec {

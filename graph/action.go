@@ -92,20 +92,19 @@ func NewAction(id, tID int, tp ActionTp) Action {
 }
 
 func (a ActionTp) IsRead() bool {
-	if a == Select ||
-		a == SelectForUpdate {
-		return true
-	}
-	return false
+	return a == Select || a == SelectForUpdate
 }
 
 func (a ActionTp) IsWrite() bool {
-	if a == Insert ||
-		a == Update ||
-		a == Delete {
-		return true
-	}
-	return false
+	return a == Insert || a == Update || a == Delete
+}
+
+func (a ActionTp) IsTxnBegin() bool {
+	return a == Begin
+}
+
+func (a ActionTp) IsTxnEnd() bool {
+	return a == Commit || a == Rollback
 }
 
 func (d DependTp) CheckValidFrom(tp ActionTp) bool {
