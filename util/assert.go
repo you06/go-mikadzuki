@@ -21,3 +21,9 @@ func AssertNil(i interface{}) {
 		panic(fmt.Sprintf("%v is not nil", i))
 	}
 }
+
+func AssertNotNil(i interface{}) {
+	if i == nil {
+		panic(fmt.Sprintf("%v is nil", i))
+	}
+}

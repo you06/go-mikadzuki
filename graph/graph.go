@@ -228,7 +228,8 @@ func (g *Graph) PushOrder(tID, aID int) {
 }
 
 func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool) {
-	before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
+	beforeTimeline := g.GetTimeline(action.vIns[0].tID)
+	before := beforeTimeline.GetAction(action.vIns[0].aID)
 	if !before.knowValue {
 		return nil, false
 	}
@@ -243,10 +244,10 @@ func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool
 		timeline := g.GetTimeline(action.tID)
 		for i := action.id - 1; i >= 0; i-- {
 			internal := timeline.GetAction(i)
-			if internal.tp == Begin {
+			if internal.tp.IsTxnBegin() {
 				break
 			} else if internal.tp.IsWrite() {
-				if internal.kID == txn.KID {
+				if internal.kID == action.kID {
 					action.vID = internal.vID
 					return txn, true
 				}
@@ -254,6 +255,17 @@ func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool
 		}
 		txn.Latest = before.vID
 		txns.Push(txn)
+		// another situation is the dependent value is updated or deleted by following actions in dependent transaction
+		for i := before.id + 1; i <= len(beforeTimeline.actions); i++ {
+			next := beforeTimeline.GetAction(i)
+			if next.tp.IsTxnEnd() {
+				break
+			} else if next.tp.IsWrite() {
+				if next.kID == action.kID {
+					action.vID = next.vID
+				}
+			}
+		}
 	} else if action.tp.IsWrite() {
 		switch action.tp {
 		case Insert:
@@ -335,6 +347,7 @@ func (g *Graph) MakeLinearKV() {
 		fmt.Println("loop1")
 		done := true
 		for i := 0; i < ts; i++ {
+			fmt.Println("loop2")
 			timeline := g.GetTimeline(i)
 			var txns kv.Txns
 			if t, ok := txnsStore[i]; ok {
@@ -351,12 +364,6 @@ func (g *Graph) MakeLinearKV() {
 					// but add txn into txns break the internal order
 					if _, ok := g.getValueFromDepend(action, &txns); ok {
 						doneActionsIDs = append(doneActionsIDs, id)
-						// switch txnStatus[i] {
-						// case Commit:
-						// 	t.Commit()
-						// case Rollback:
-						// 	t.Rollback()
-						// }
 						util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
 					}
 				}
@@ -369,6 +376,7 @@ func (g *Graph) MakeLinearKV() {
 				done = false
 				continue
 			}
+			fmt.Println("loop2.5")
 			if progress[i] == timeline.allocID-1 {
 				continue
 			}
@@ -453,10 +461,23 @@ func (g *Graph) MakeLinearKV() {
 }
 
 // IterateGraph goes over the graph and exec it by given sequence
+// Since transaction is atomic, we only care about the WW value dependency here
+// Commit/Rollback
+//   i.   txns it RW depends on
+//   ii.  itself
+//   iii. Begin txns WR depend on it
+//   iv.  Commit/Rollback txns WW depend on it
+//   Commit/Rollback txns should check if there are Begin txns need to be waited before committing
+//   should avoid any txns being committed between iii and iv, unless it will pollute value dependency
+// Begin
+//   i.   txns it WR depends on(only WR here)
+//   ii.  itself
+//   iii. txns RW depend on it(only RW here)
 func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *sql.Result, error)) error {
 	errCh := make(chan error)
 	doneCh := make(chan struct{})
 	var checkMutex sync.Mutex
+	var txnMutex sync.Mutex
 	for i := 0; i < len(g.timelines); i++ {
 		go func(i int) {
 			var (
@@ -465,19 +486,62 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 				action *Action
 			)
 			timeline := g.GetTimeline(i)
+			timeline.GetAction(0).SetReady(true)
 			for j := 0; j < len(timeline.actions); j++ {
 				action = timeline.GetAction(j)
-				for _, depend := range action.ins {
-					for !g.GetTimeline(depend.tID).GetAction(depend.aID).ifExec {
-						time.Sleep(WAIT_TIME)
-					}
-				}
+				// WW value dependency
 				for _, depend := range action.vIns {
-					for depend.tp == WW && !g.GetTimeline(depend.tID).GetAction(depend.aID).ifExec {
+					for depend.tp == WW && !g.GetTimeline(depend.tID).GetAction(depend.aID).GetExec() {
 						time.Sleep(WAIT_TIME)
 					}
 				}
-				rows, _, err = exec(i, action.id, action.tp, action.SQL)
+
+				for _, depend := range action.ins {
+					before := g.GetTimeline(depend.tID).GetAction(depend.aID)
+					for !before.GetExec() {
+						time.Sleep(WAIT_TIME)
+					}
+				}
+
+				for _, depend := range action.outs {
+					next := g.GetTimeline(depend.tID).GetAction(depend.aID)
+					if !next.GetReady() {
+						time.Sleep(WAIT_TIME)
+					}
+				}
+
+				if action.tp.IsTxn() {
+					txnMutex.Lock()
+				}
+				if !action.GetExec() {
+					rows, _, err = exec(i, action.id, action.tp, action.SQL)
+				}
+				if action.tp.IsTxn() {
+					for _, depend := range action.outs {
+						if depend.tp == WR {
+							next := g.GetTimeline(depend.tID).GetAction(depend.aID)
+							util.AssertNotNil(next)
+							if _, _, err := exec(next.tID, next.id, next.tp, next.SQL); err != nil {
+								errCh <- err
+							} else {
+								next.SetExec(true)
+							}
+						}
+					}
+					for _, depend := range action.outs {
+						if depend.tp == WW {
+							next := g.GetTimeline(depend.tID).GetAction(depend.aID)
+							util.AssertNotNil(next)
+							if _, _, err := exec(next.tID, next.id, next.tp, next.SQL); err != nil {
+								errCh <- err
+							} else {
+								next.SetExec(true)
+							}
+						}
+					}
+					txnMutex.Unlock()
+				}
+
 				if err != nil {
 					errCh <- err
 					return
@@ -485,10 +549,16 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 				switch action.tp {
 				case Select:
 					if same, err := g.schema.CompareData(action.vID, rows); !same {
+						if strings.Contains(err.Error(), "data length 0, expect 1") {
+							g.TraceEmpty(action)
+						}
 						errCh <- fmt.Errorf("%s got %s", action.SQL, err.Error())
 					}
 				}
-				action.ifExec = true
+				action.SetExec(true)
+				if next := timeline.GetAction(j + 1); next != nil {
+					next.SetReady(true)
+				}
 			}
 			// check if all done
 			checkMutex.Lock()
@@ -511,6 +581,31 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 			return nil
 		}
 	}
+}
+
+func (g *Graph) TraceEmpty(action *Action) {
+	fmt.Printf("Executed SQL: %s\n", action.SQL)
+	fmt.Printf("Correct data of (%d, %d): %s\n", action.tID, action.id, g.schema.GetData(action.vID))
+	for _, depend := range action.vIns {
+		before := g.GetTimeline(depend.tID).GetAction(depend.aID)
+		if before.vID == action.vID {
+			fmt.Printf("It depends on (%d, %d, %s)\n", before.tID, before.id, before.tp)
+		}
+	}
+
+	fmt.Print("Same key id actions:")
+	ts := len(g.timelines)
+	for i := 0; i < ts; i++ {
+		t := g.GetTimeline(i)
+		as := len(t.actions)
+		for j := 0; j < as; j++ {
+			a := t.GetAction(j)
+			if a.kID == action.kID {
+				fmt.Printf(" (%d, %d, %s)", a.tID, a.id, a.tp)
+			}
+		}
+	}
+	fmt.Print("\n")
 }
 
 func (g *Graph) String() string {

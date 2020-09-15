@@ -3,11 +3,13 @@ package graph
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/you06/go-mikadzuki/kv"
 )
 
 type Action struct {
+	sync.RWMutex
 	id  int
 	tID int
 	tp  ActionTp
@@ -28,6 +30,7 @@ type Action struct {
 	knowValue bool
 	SQL       string
 	ifExec    bool
+	ifReady   bool
 }
 
 type ActionTp string
@@ -107,6 +110,10 @@ func (a ActionTp) IsTxnEnd() bool {
 	return a == Commit || a == Rollback
 }
 
+func (a ActionTp) IsTxn() bool {
+	return a.IsTxnBegin() || a.IsTxnEnd()
+}
+
 func (d DependTp) CheckValidFrom(tp ActionTp) bool {
 	switch d {
 	case RW:
@@ -177,6 +184,30 @@ func (d DependTp) GetActionTo(actions []Action) Action {
 	default:
 		panic("unreachable")
 	}
+}
+
+func (a *Action) SetExec(b bool) {
+	a.Lock()
+	a.ifExec = b
+	a.Unlock()
+}
+
+func (a *Action) GetExec() bool {
+	a.RLock()
+	defer a.RUnlock()
+	return a.ifExec
+}
+
+func (a *Action) SetReady(b bool) {
+	a.Lock()
+	a.ifReady = b
+	a.Unlock()
+}
+
+func (a *Action) GetReady() bool {
+	a.RLock()
+	defer a.RUnlock()
+	return a.ifReady
 }
 
 func (a *Action) String() string {
