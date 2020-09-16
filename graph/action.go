@@ -9,7 +9,6 @@ import (
 )
 
 type Action struct {
-	sync.RWMutex
 	id  int
 	tID int
 	tp  ActionTp
@@ -29,6 +28,7 @@ type Action struct {
 	vID       int
 	knowValue bool
 	SQL       string
+	lock      *sync.RWMutex
 	ifExec    bool
 	ifReady   bool
 }
@@ -90,7 +90,9 @@ func NewAction(id, tID int, tp ActionTp) Action {
 		knowValue: false,
 		vID:       kv.INVALID_VALUE_ID,
 		SQL:       "",
+		lock:      &sync.RWMutex{},
 		ifExec:    false,
+		ifReady:   false,
 	}
 }
 
@@ -187,26 +189,26 @@ func (d DependTp) GetActionTo(actions []Action) Action {
 }
 
 func (a *Action) SetExec(b bool) {
-	a.Lock()
+	a.lock.Lock()
 	a.ifExec = b
-	a.Unlock()
+	a.lock.Unlock()
 }
 
 func (a *Action) GetExec() bool {
-	a.RLock()
-	defer a.RUnlock()
+	a.lock.RLock()
+	defer a.lock.RUnlock()
 	return a.ifExec
 }
 
 func (a *Action) SetReady(b bool) {
-	a.Lock()
+	a.lock.Lock()
 	a.ifReady = b
-	a.Unlock()
+	a.lock.Unlock()
 }
 
 func (a *Action) GetReady() bool {
-	a.RLock()
-	defer a.RUnlock()
+	a.lock.RLock()
+	defer a.lock.RUnlock()
 	return a.ifReady
 }
 

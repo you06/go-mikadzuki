@@ -21,7 +21,7 @@ const LOGTIME_FORMAT = "2006-01-02 15:04:05.00000"
 var (
 	EMPTY_TIME    = time.Time{}
 	TIME_MAX      = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC)
-	threadPattern = regexp.MustCompile(`thread-(\d+)\.txt`)
+	threadPattern = regexp.MustCompile(`thread-(\d+)\.log`)
 	startPattern  = regexp.MustCompile(`.*\[(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{5}).*`)
 )
 
@@ -190,7 +190,11 @@ func ParseLog(logPath string) error {
 	if err != nil {
 		return err
 	}
-	defer combineFile.Close()
+	defer func() {
+		if err := combineFile.Close(); err != nil {
+			fmt.Println(err)
+		}
+	}()
 	combineWriter := bufio.NewWriter(combineFile)
 
 	// TODO: use min-heap

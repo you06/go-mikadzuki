@@ -343,8 +343,10 @@ func (g *Graph) MakeLinearKV() {
 		waitActions[i] = make(map[int]struct{})
 	}
 	txnStatus := make([]ActionTp, ts)
+	loop1Time := 1
 	for {
 		fmt.Println("loop1")
+		loop1Time++
 		done := true
 		for i := 0; i < ts; i++ {
 			fmt.Println("loop2")
@@ -356,6 +358,7 @@ func (g *Graph) MakeLinearKV() {
 				txns = []*kv.Txn{initKVs[i].Begin()}
 				txnsStore[i] = &txns
 			}
+			fmt.Println("loop2.4")
 			if len(waitActions[i]) != 0 {
 				var doneActionsIDs []int
 				for id := range waitActions[i] {
@@ -377,6 +380,9 @@ func (g *Graph) MakeLinearKV() {
 				continue
 			}
 			fmt.Println("loop2.5")
+			if loop1Time > 200 {
+				fmt.Println("progress:", progress)
+			}
 			if progress[i] == timeline.allocID-1 {
 				continue
 			}
@@ -433,6 +439,8 @@ func (g *Graph) MakeLinearKV() {
 		}
 	}
 
+	fmt.Println("dependency analyse done")
+
 	// generate all select SQLs and check if there are invalid value ids
 	for i := 0; i < ts; i++ {
 		timeline := g.GetTimeline(i)
@@ -468,7 +476,7 @@ func (g *Graph) MakeLinearKV() {
 //   iii. Begin txns WR depend on it
 //   iv.  Commit/Rollback txns WW depend on it
 //   Commit/Rollback txns should check if there are Begin txns need to be waited before committing
-//   should avoid any txns being committed between iii and iv, unless it will pollute value dependency
+//   should avoid any txns being committed between ii and iii, unless it will pollute value dependency
 // Begin
 //   i.   txns it WR depends on(only WR here)
 //   ii.  itself
@@ -478,6 +486,8 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 	doneCh := make(chan struct{})
 	var checkMutex sync.Mutex
 	var txnMutex sync.Mutex
+	var control sync.RWMutex
+	progress := make([]int, len(g.timelines))
 	for i := 0; i < len(g.timelines); i++ {
 		go func(i int) {
 			var (
@@ -488,7 +498,10 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 			timeline := g.GetTimeline(i)
 			timeline.GetAction(0).SetReady(true)
 			for j := 0; j < len(timeline.actions); j++ {
+				control.RLock()
 				action = timeline.GetAction(j)
+				control.RUnlock()
+				progress[i] = j
 				// WW value dependency
 				for _, depend := range action.vIns {
 					for depend.tp == WW && !g.GetTimeline(depend.tID).GetAction(depend.aID).GetExec() {
@@ -505,8 +518,15 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 
 				for _, depend := range action.outs {
 					next := g.GetTimeline(depend.tID).GetAction(depend.aID)
-					if !next.GetReady() {
-						time.Sleep(WAIT_TIME)
+					if depend.tp == WR {
+						waitTime := 1
+						for !next.GetReady() {
+							time.Sleep(WAIT_TIME)
+							waitTime += 1
+							if waitTime%300 == 0 {
+								fmt.Printf("(%d, %d) %s waiting for (%d, %d) ready, progress: %v\n", i, action.id, depend.tp, next.tID, next.id, progress)
+							}
+						}
 					}
 				}
 
@@ -520,23 +540,10 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 					for _, depend := range action.outs {
 						if depend.tp == WR {
 							next := g.GetTimeline(depend.tID).GetAction(depend.aID)
-							util.AssertNotNil(next)
-							if _, _, err := exec(next.tID, next.id, next.tp, next.SQL); err != nil {
+							if _, _, err := exec(depend.tID, next.id, next.tp, next.SQL); err != nil {
 								errCh <- err
-							} else {
-								next.SetExec(true)
 							}
-						}
-					}
-					for _, depend := range action.outs {
-						if depend.tp == WW {
-							next := g.GetTimeline(depend.tID).GetAction(depend.aID)
-							util.AssertNotNil(next)
-							if _, _, err := exec(next.tID, next.id, next.tp, next.SQL); err != nil {
-								errCh <- err
-							} else {
-								next.SetExec(true)
-							}
+							next.SetExec(true)
 						}
 					}
 					txnMutex.Unlock()
@@ -549,10 +556,12 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 				switch action.tp {
 				case Select:
 					if same, err := g.schema.CompareData(action.vID, rows); !same {
+						control.Lock()
 						if strings.Contains(err.Error(), "data length 0, expect 1") {
-							g.TraceEmpty(action)
+							g.TraceEmpty(action, exec)
 						}
 						errCh <- fmt.Errorf("%s got %s", action.SQL, err.Error())
+						control.Unlock()
 					}
 				}
 				action.SetExec(true)
@@ -583,8 +592,8 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 	}
 }
 
-func (g *Graph) TraceEmpty(action *Action) {
-	fmt.Printf("Executed SQL: %s\n", action.SQL)
+func (g *Graph) TraceEmpty(action *Action, exec func(int, int, ActionTp, string) (*sql.Rows, *sql.Result, error)) {
+	fmt.Printf("Executed SQL got empty: %s\n", action.SQL)
 	fmt.Printf("Correct data of (%d, %d): %s\n", action.tID, action.id, g.schema.GetData(action.vID))
 	for _, depend := range action.vIns {
 		before := g.GetTimeline(depend.tID).GetAction(depend.aID)
@@ -593,6 +602,7 @@ func (g *Graph) TraceEmpty(action *Action) {
 		}
 	}
 
+	var b strings.Builder
 	fmt.Print("Same key id actions:")
 	ts := len(g.timelines)
 	for i := 0; i < ts; i++ {
@@ -602,10 +612,22 @@ func (g *Graph) TraceEmpty(action *Action) {
 			a := t.GetAction(j)
 			if a.kID == action.kID {
 				fmt.Printf(" (%d, %d, %s)", a.tID, a.id, a.tp)
+				if a.tp.IsRead() || a.tp.IsWrite() && a.vID != kv.NULL_VALUE_ID {
+					selectSQL := g.schema.SelectSQL(a.vID)
+					rows, _, err := exec(-1, a.id, Select, selectSQL)
+					if err == nil {
+						if same, _ := g.schema.CompareData(a.vID, rows); same {
+							fmt.Fprintf(&b, "(%d, %d, %s)'s value still alive, SQL: %s\n", a.tID, a.id, a.tp, selectSQL)
+						}
+					} else {
+						fmt.Fprintf(&b, "(%d, %d, %s) exec error, error: %s\n", a.tID, a.id, a.tp, err.Error())
+					}
+				}
 			}
 		}
 	}
 	fmt.Print("\n")
+	fmt.Print(b.String())
 }
 
 func (g *Graph) String() string {
