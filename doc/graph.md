@@ -42,6 +42,8 @@ In this process, the difference of isolation levels between databases must be co
 
 As the transaction is atomic, it should be treating as a whole, the following cases:
 
+### Txn graph & Value graph
+
 This is a value dependency graph, there is a cycle in it, but we cannot infer that this transaction is invalid. If `t2` starts before `t1`'s commit, then it's read action can get the old value.
 
 ```text
@@ -58,12 +60,39 @@ t2: begin -> w(2, 3) -> r(1, 1) -> commit
 To change a value dependency graph into a transaction dependency graph, we make `WW` between commit actions and `RW` between begin and commit. Then we can infer that the transactions are valid.
 
 ```text
-r(1, 1)
-r(2, 1)
-t1: begin -> w(1, 2) -> w(2, 2) -> commit
+r(x, 1)
+r(y, 1)
+t1: begin -> w(x, 2) -> w(y, 2) -> commit
                                     ↑ |
        ──────────── RW ─────────────  |
       |                               WW
       |                               ↓
-t2: begin -> w(2, 3) -> r(1, 1) -> commit
+t2: begin -> w(y, 3) -> r(x, 1) -> commit
 ```
+
+### Impossible graph
+
+```text
+w(x, 1) -> commit
+ |   |
+ |WW `───────────── WR ──────────`
+ ↓                               ↓
+w(x, 2) -> commit -> begin -> r(x, 1) -> commit
+```
+
+This is an impossible graph, because of realtime dependency.
+
+### Ambiguous graph
+
+```text
+w(x, 1) -> commit
+ |   |
+ |   `───────────── WW ──────────`
+ |                               ↓
+ |            ... -> begin -> w(x, 3) -> commit
+ |WW                             |WR
+ ↓                               ↓
+w(x, 2) -> commit -> begin -> r(x, 3) -> commit
+```
+
+From this graph, we cannot infer the execution sequence of `w(x, 2)` and `w(x, 3)`. If `w(x, 3)` is executed first, the value will overwrite by `w(x, 2)`, then `r(x, 3)` is impossible.

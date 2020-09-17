@@ -137,6 +137,7 @@ func (g *Graph) GetTransaction(t, a int) []Action {
 	return res
 }
 
+// IfCycle check if a dependency will broke DAG
 func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
 	ts := len(g.timelines)
 	visited := make([][]bool, ts)
@@ -166,6 +167,96 @@ func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
 		return false
 	}
 	return dfs(t2, a2, t1, a1)
+}
+
+// IfPossible check if a dependency is possible, redundant dependency is harmful in execution
+// ```
+// w(x, 1) -> commit
+//  |   |
+//  |WW `───────────── WR ──────────`
+//  ↓                               ↓
+// w(x, 2) -> commit -> begin -> r(x, 1) -> commit
+// ```
+// in this case, we should keep only one of WW and WR dependencies, because they are impossible to stay together
+func (g *Graph) IfPossible(t1, a1, t2, a2 int, tp DependTp) bool {
+	switch tp {
+	case WW:
+		action := g.GetTimeline(t1).GetAction(a1)
+		for _, out := range action.outs {
+			if out.tp == WR && out.tID == t2 && out.aID == a2+1 {
+				return false
+			}
+		}
+	case WR:
+		action := g.GetTimeline(t1).GetAction(a1)
+		for _, out := range action.outs {
+			if out.tp == WW && out.tID == t2 && out.aID == a2-1 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+func (g *Graph) FixDepend(t1, a1, t2, a2 int, tp DependTp) bool {
+	return true
+}
+
+func (g *Graph) IfPossible1(t1, a1, t2, a2 int, tp DependTp) bool {
+	var findWriteTop func(int, int) (int, int)
+	var generateSet func(int, int, DependTp)
+	wset, rset := make(map[int]int), make(map[int]int)
+
+	findWriteTop = func(t, a int) (int, int) {
+		action := g.GetTimeline(t).GetAction(a)
+		if len(action.vIns) == 0 {
+			return t, a
+		}
+		if tp == WR && action.vIns[0].tID == t2 {
+			return t, a
+		}
+		return findWriteTop(action.vIns[0].tID, action.vIns[0].aID)
+	}
+
+	generateSet = func(t, a int, tp DependTp) {
+		action := g.GetTimeline(t).GetAction(a)
+		for _, out := range action.vOuts {
+			if tp == WR && out.tp == WR {
+				if v, ok := rset[out.tID]; !ok || out.aID < v {
+					rset[out.tID] = out.aID
+				}
+			} else if tp == WW && out.tp == WW {
+				if v, ok := wset[out.tID]; !ok || out.aID > v {
+					wset[out.tID] = out.aID
+				}
+				generateSet(out.tID, out.aID, tp)
+			}
+		}
+	}
+
+	t, a := findWriteTop(t1, a1)
+	generateSet(t, a, WW)
+	if tp == WW {
+		if v, ok := wset[t2]; !ok || a2 > v {
+			wset[t2] = a2
+		}
+		generateSet(t2, a2, WW)
+		generateSet(t2, a2, WR)
+	}
+	if tp == WR {
+		if v, ok := rset[t2]; !ok || a2 < v {
+			rset[t2] = a2
+		}
+	}
+	fmt.Println(rset, wset)
+
+	for t, r := range rset {
+		if w, ok := wset[t]; ok && w < r {
+			return false
+		}
+	}
+
+	return true
 }
 
 func (g *Graph) ConnectTxnDepend(t1, a1, t2, a2 int, tp DependTp) {
