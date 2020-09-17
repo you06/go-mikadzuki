@@ -80,7 +80,7 @@ w(x, 1) -> commit
 w(x, 2) -> commit -> begin -> r(x, 1) -> commit
 ```
 
-This is an impossible graph, because of realtime dependency.
+This is an impossible graph, because of realtime dependency. This situation should be noticed in graph generation.
 
 ### Ambiguous graph
 
@@ -96,3 +96,31 @@ w(x, 2) -> commit -> begin -> r(x, 3) -> commit
 ```
 
 From this graph, we cannot infer the execution sequence of `w(x, 2)` and `w(x, 3)`. If `w(x, 3)` is executed first, the value will overwrite by `w(x, 2)`, then `r(x, 3)` is impossible.
+
+Unlike impossible graph, ambiguous graph can be fixed by adding dependencies. When there are more 1 actions WW depend on the same action, there should be depend on these actions. In this case, we should add dependency from `w(x, 2)` to `w(x, 3)`.
+
+```text
+w(x, 1) -> commit
+ |
+ |
+ |
+ |            ... -> begin -> w(x, 3) -> commit
+ |WW                            ↑  |WR
+ |   ──────────── WW ───────────   |
+ ↓  |                              ↓
+w(x, 2) -> commit -> begin -> r(x, 3) -> commit
+```
+
+This is an invalid case, but notice that, this is the same topology to the [impossible graph](#impossible-graph), which should be detected by impossible graph checker.
+
+```text
+w(x, 1) -> commit
+     |
+     `───────────── WW ──────────`
+                                 ↓
+              ... -> begin -> w(x, 2) -> commit
+                                |  |WR
+     ──────────── WW ───────────   |
+    ↓                              ↓
+w(x, 3) -> commit -> begin -> r(x, 2) -> commit
+```

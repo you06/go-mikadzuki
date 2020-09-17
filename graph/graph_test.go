@@ -30,41 +30,57 @@ func TestCreateTimeline(t *testing.T) {
 func TestIfPossible(t *testing.T) {
 	graph := emptyGraph()
 	timeline := graph.NewTimeline()
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Insert)
-	timeline.NewACtionWithTp(Commit)
+	timeline.NewACtionWithTp(Begin)  // 0
+	timeline.NewACtionWithTp(Insert) // 1
+	timeline.NewACtionWithTp(Commit) // 2
 	timeline = graph.NewTimeline()
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Update)
-	timeline.NewACtionWithTp(Commit)
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Update)
-	timeline.NewACtionWithTp(Commit)
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Select)
-	timeline.NewACtionWithTp(Commit)
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Update)
-	timeline.NewACtionWithTp(Commit)
+	timeline.NewACtionWithTp(Begin)  // 0
+	timeline.NewACtionWithTp(Select) // 1
+	timeline.NewACtionWithTp(Update) // 2
+	timeline.NewACtionWithTp(Commit) // 3
+	timeline.NewACtionWithTp(Begin)  // 4
+	timeline.NewACtionWithTp(Select) // 5
+	timeline.NewACtionWithTp(Commit) // 6
+	timeline.NewACtionWithTp(Begin)  // 7
+	timeline.NewACtionWithTp(Update) // 8
+	timeline.NewACtionWithTp(Commit) // 9
 	timeline = graph.NewTimeline()
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Update)
-	timeline.NewACtionWithTp(Commit)
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Update)
-	timeline.NewACtionWithTp(Commit)
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Select)
-	timeline.NewACtionWithTp(Commit)
-	timeline.NewACtionWithTp(Begin)
-	timeline.NewACtionWithTp(Update)
-	timeline.NewACtionWithTp(Commit)
-	graph.ConnectValueDepend(1, 1, 0, 1, WW)
-	graph.ConnectValueDepend(0, 1, 1, 7, WR)
-	require.False(t, graph.IfPossible(0, 1, 1, 4, WW))
-	require.True(t, graph.IfPossible(0, 1, 1, 10, WW))
-	graph.ConnectValueDepend(0, 1, 2, 4, WW)
-	graph.ConnectValueDepend(1, 10, 2, 7, WR)
-	require.False(t, graph.IfPossible(0, 1, 1, 10, WW))
-	require.True(t, graph.IfPossible(2, 4, 1, 10, WW))
+	timeline.NewACtionWithTp(Begin)  // 0
+	timeline.NewACtionWithTp(Select) // 1
+	timeline.NewACtionWithTp(Update) // 2
+	timeline.NewACtionWithTp(Commit) // 3
+	timeline.NewACtionWithTp(Begin)  // 4
+	timeline.NewACtionWithTp(Select) // 5
+	timeline.NewACtionWithTp(Commit) // 6
+	graph.ConnectValueDepend(0, 1, 1, 5, WR)
+	require.False(t, graph.IfPossible(0, 1, 1, 2, WW))
+	require.True(t, graph.IfPossible(0, 1, 1, 8, WW))
+	graph.ConnectValueDepend(0, 1, 2, 2, WW)
+	require.False(t, graph.IfPossible(0, 1, 2, 5, WR))
+	require.True(t, graph.IfPossible(0, 1, 2, 1, WR))
+}
+
+func TestIfCycle(t *testing.T) {
+	graph := emptyGraph()
+	timeline := graph.NewTimeline()
+	timeline.NewACtionWithTp(Begin)  // 0
+	timeline.NewACtionWithTp(Insert) // 1
+	timeline.NewACtionWithTp(Commit) // 2
+	timeline = graph.NewTimeline()
+	timeline.NewACtionWithTp(Begin)  // 0
+	timeline.NewACtionWithTp(Insert) // 1
+	timeline.NewACtionWithTp(Commit) // 2
+	timeline = graph.NewTimeline()
+	timeline.NewACtionWithTp(Begin)  // 0
+	timeline.NewACtionWithTp(Insert) // 1
+	timeline.NewACtionWithTp(Commit) // 2
+	timeline = graph.NewTimeline()
+	timeline.NewACtionWithTp(Begin)  // 0
+	timeline.NewACtionWithTp(Insert) // 1
+	timeline.NewACtionWithTp(Commit) // 2
+	graph.ConnectTxnDepend(0, 2, 1, 0, WW)
+	require.True(t, graph.IfCycle(1, 2, 0, 1))
+	graph.ConnectTxnDepend(1, 2, 2, 0, WW)
+	graph.ConnectTxnDepend(2, 2, 3, 0, WW)
+	require.True(t, graph.IfCycle(3, 2, 0, 0))
 }

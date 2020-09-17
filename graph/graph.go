@@ -68,8 +68,8 @@ func (g *Graph) AddDependency(dependTp DependTp) error {
 		a2       int
 		actions1 []Action
 		actions2 []Action
-		action1  Action
-		action2  Action
+		tAction1 Action
+		tAction2 Action
 	)
 	for i := 0; i < MAX_RETRY; i++ {
 		t1 = rand.Intn(ts)
@@ -81,23 +81,43 @@ func (g *Graph) AddDependency(dependTp DependTp) error {
 		actions1 = g.GetTransaction(t1, a1)
 		a2 = rand.Intn(len(g.timelines[t2].actions))
 		actions2 = g.GetTransaction(t2, a2)
+
 		for j := 0; j < MAX_RETRY && actions2[0].id == 0; j++ {
 			a2 = rand.Intn(len(g.timelines[t2].actions))
 			actions2 = g.GetTransaction(t2, a2)
 		}
+		action1 := g.GetTimeline(t1).GetAction(a1)
+		action2 := g.GetTimeline(t2).GetAction(a2)
 		if actions2[0].id == 0 {
 			return errors.New("failed to get non-first transaction")
 		}
 		if len(g.timelines[t1].actions[a1].vIns) == 0 &&
 			len(g.timelines[t2].actions[a2].vIns) == 0 &&
-			dependTp.CheckValidFrom(g.timelines[t1].actions[a1].tp) &&
-			dependTp.CheckValidTo(g.timelines[t2].actions[a2].tp) {
+			dependTp.CheckValidFrom(action1.tp) &&
+			dependTp.CheckValidTo(action2.tp) {
+			// adjust t1 and a1
+			for {
+				hasWW := false
+				for _, depend := range action1.vOuts {
+					if depend.tp == WW {
+						hasWW = true
+						t1 = depend.tID
+						a1 = depend.aID
+						action1 = g.GetTimeline(t1).GetAction(a1)
+						break
+					}
+				}
+				if !hasWW {
+					break
+				}
+			}
+			actions1 = g.GetTransaction(t1, a1)
 			if dependTp.CheckValidLastFrom(actions1[len(actions1)-1].tp) &&
 				dependTp.CheckValidLastTo(actions2[len(actions2)-1].tp) {
-				action1 = dependTp.GetActionFrom(actions1)
-				action2 = dependTp.GetActionTo(actions2)
-				if !g.IfCycle(t1, action1.id, t2, action2.id) {
-					g.ConnectTxnDepend(t1, action1.id, t2, action2.id, dependTp)
+				tAction1 = dependTp.GetActionFrom(actions1)
+				tAction2 = dependTp.GetActionTo(actions2)
+				if !g.IfCycle(t1, tAction1.id, t2, tAction2.id) && g.IfPossible(t1, a1, t2, a2, dependTp) {
+					g.ConnectTxnDepend(t1, tAction1.id, t2, tAction2.id, dependTp)
 					g.ConnectValueDepend(t1, a1, t2, a2, dependTp)
 					return nil
 				}
@@ -158,10 +178,18 @@ func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
 			return false
 		}
 		visited[t1][a1] = true
-		nexts := g.timelines[t1].actions[a1].outs
-		for _, next := range nexts {
+		outs := g.timelines[t1].actions[a1].outs
+		vOuts := g.timelines[t1].actions[a1].vOuts
+		for _, next := range outs {
 			if dfs(next.tID, next.aID, t2, a2) {
 				return true
+			}
+		}
+		for _, next := range vOuts {
+			if next.tp == WW {
+				if dfs(next.tID, next.aID, t2, a2) {
+					return true
+				}
 			}
 		}
 		return false
@@ -182,80 +210,20 @@ func (g *Graph) IfPossible(t1, a1, t2, a2 int, tp DependTp) bool {
 	switch tp {
 	case WW:
 		action := g.GetTimeline(t1).GetAction(a1)
-		for _, out := range action.outs {
-			if out.tp == WR && out.tID == t2 && out.aID == a2+1 {
+		for _, out := range action.vOuts {
+			fmt.Println(out.tp, out.tID, out.aID, a2)
+			if out.tp == WR && out.tID == t2 && out.aID > a2 {
 				return false
 			}
 		}
 	case WR:
 		action := g.GetTimeline(t1).GetAction(a1)
-		for _, out := range action.outs {
-			if out.tp == WW && out.tID == t2 && out.aID == a2-1 {
+		for _, out := range action.vOuts {
+			if out.tp == WW && out.tID == t2 && out.aID < a2 {
 				return false
 			}
 		}
 	}
-	return true
-}
-
-func (g *Graph) FixDepend(t1, a1, t2, a2 int, tp DependTp) bool {
-	return true
-}
-
-func (g *Graph) IfPossible1(t1, a1, t2, a2 int, tp DependTp) bool {
-	var findWriteTop func(int, int) (int, int)
-	var generateSet func(int, int, DependTp)
-	wset, rset := make(map[int]int), make(map[int]int)
-
-	findWriteTop = func(t, a int) (int, int) {
-		action := g.GetTimeline(t).GetAction(a)
-		if len(action.vIns) == 0 {
-			return t, a
-		}
-		if tp == WR && action.vIns[0].tID == t2 {
-			return t, a
-		}
-		return findWriteTop(action.vIns[0].tID, action.vIns[0].aID)
-	}
-
-	generateSet = func(t, a int, tp DependTp) {
-		action := g.GetTimeline(t).GetAction(a)
-		for _, out := range action.vOuts {
-			if tp == WR && out.tp == WR {
-				if v, ok := rset[out.tID]; !ok || out.aID < v {
-					rset[out.tID] = out.aID
-				}
-			} else if tp == WW && out.tp == WW {
-				if v, ok := wset[out.tID]; !ok || out.aID > v {
-					wset[out.tID] = out.aID
-				}
-				generateSet(out.tID, out.aID, tp)
-			}
-		}
-	}
-
-	t, a := findWriteTop(t1, a1)
-	generateSet(t, a, WW)
-	if tp == WW {
-		if v, ok := wset[t2]; !ok || a2 > v {
-			wset[t2] = a2
-		}
-		generateSet(t2, a2, WW)
-		generateSet(t2, a2, WR)
-	}
-	if tp == WR {
-		if v, ok := rset[t2]; !ok || a2 < v {
-			rset[t2] = a2
-		}
-	}
-	fmt.Println(rset, wset)
-
-	for t, r := range rset {
-		if w, ok := wset[t]; ok && w < r {
-			return false
-		}
-	}
-
 	return true
 }
 
@@ -344,9 +312,7 @@ func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool
 				}
 			}
 		}
-		txn.Latest = before.vID
-		txns.Push(txn)
-		// another situation is the dependent value is updated or deleted by following actions in dependent transaction
+		// another situation is the dependent value is updated or deleted by following actions in the same transaction
 		for i := before.id + 1; i <= len(beforeTimeline.actions); i++ {
 			next := beforeTimeline.GetAction(i)
 			if next.tp.IsTxnEnd() {
@@ -595,15 +561,25 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 				progress[i] = j
 				// WW value dependency
 				for _, depend := range action.vIns {
+					waitTime := 1
 					for depend.tp == WW && !g.GetTimeline(depend.tID).GetAction(depend.aID).GetExec() {
 						time.Sleep(WAIT_TIME)
+						waitTime += 1
+						if waitTime%300 == 0 {
+							fmt.Printf("p1 (%d, %d) %s waiting for (%d, %d) done, progress: %v\n", i, action.id, depend.tp, depend.tID, depend.aID, progress)
+						}
 					}
 				}
 
 				for _, depend := range action.ins {
 					before := g.GetTimeline(depend.tID).GetAction(depend.aID)
+					waitTime := 1
 					for !before.GetExec() {
 						time.Sleep(WAIT_TIME)
+						waitTime += 1
+						if waitTime%300 == 0 {
+							fmt.Printf("p2 (%d, %d) %s waiting for (%d, %d) done, progress: %v\n", i, action.id, depend.tp, depend.tID, depend.aID, progress)
+						}
 					}
 				}
 
@@ -615,7 +591,7 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 							time.Sleep(WAIT_TIME)
 							waitTime += 1
 							if waitTime%300 == 0 {
-								fmt.Printf("(%d, %d) %s waiting for (%d, %d) ready, progress: %v\n", i, action.id, depend.tp, next.tID, next.id, progress)
+								fmt.Printf("p3 (%d, %d) %s waiting for (%d, %d) ready, progress: %v\n", i, action.id, depend.tp, next.tID, next.id, progress)
 							}
 						}
 					}
