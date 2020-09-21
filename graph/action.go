@@ -68,6 +68,7 @@ var (
 	RW        DependTp = "RW"
 	WW        DependTp = "WW"
 	WR        DependTp = "WR"
+	WRCommit  DependTp = "WRCommit"
 	Realtime  DependTp = "Realtime"
 	NotInit   DependTp = "NotInit"
 	dependTps          = []DependTp{

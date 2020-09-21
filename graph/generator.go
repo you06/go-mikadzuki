@@ -122,6 +122,7 @@ OUTER:
 			}
 		}
 	}
+	graph.MakeDependencyForRead()
 	graph.MakeLinearKV()
 	return graph
 }
