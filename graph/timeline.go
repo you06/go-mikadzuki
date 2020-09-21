@@ -8,7 +8,7 @@ type Timeline struct {
 	id      int
 	allocID int
 	actions []Action
-	Txns    []Txn
+	txns    []Txn
 }
 
 func NewTimeline(id int) Timeline {
@@ -16,6 +16,7 @@ func NewTimeline(id int) Timeline {
 		id:      id,
 		allocID: 0,
 		actions: []Action{},
+		txns:    []Txn{},
 	}
 }
 
@@ -56,4 +57,18 @@ func (t *Timeline) String() string {
 		b.WriteString(a.String())
 	}
 	return b.String()
+}
+
+func (t *Timeline) NewTxnWithStatus(s Status) *Txn {
+	id := t.allocID
+	txn := NewTxn(id, s)
+	t.txns = append(t.txns, txn)
+	return &t.txns[id]
+}
+
+func (t *Timeline) GetTxn(n int) *Txn {
+	if n < t.allocID {
+		return &t.txns[n]
+	}
+	return nil
 }

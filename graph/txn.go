@@ -1,18 +1,26 @@
 package graph
 
 type Txn struct {
-	id      int
-	allocID int
-	actions []Action
-	status  Status
+	id        int
+	allocID   int
+	actions   []Action
+	status    Status
+	startOuts []Depend
+	startIns  []Depend
+	endIns    []Depend
+	endOuts   []Depend
 }
 
 func NewTxn(id int, s Status) Txn {
 	return Txn{
-		id:      id,
-		allocID: 0,
-		actions: []Action{},
-		status:  s,
+		id:        id,
+		allocID:   0,
+		actions:   []Action{},
+		status:    s,
+		startOuts: []Depend{},
+		startIns:  []Depend{},
+		endIns:    []Depend{},
+		endOuts:   []Depend{},
 	}
 }
 
