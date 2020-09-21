@@ -37,6 +37,8 @@ type ActionTp string
 
 type DependTp string
 
+type Status string
+
 type Depend struct {
 	tID int
 	aID int
@@ -77,6 +79,11 @@ var (
 		WR,
 		Realtime,
 	}
+)
+
+var (
+	Committed  Status = "Committed"
+	Rollbacked Status = "Rollbacked"
 )
 
 func NewAction(id, tID int, tp ActionTp) Action {

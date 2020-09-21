@@ -8,6 +8,7 @@ type Timeline struct {
 	id      int
 	allocID int
 	actions []Action
+	Txns    []Txn
 }
 
 func NewTimeline(id int) Timeline {
