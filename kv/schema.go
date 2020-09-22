@@ -2,7 +2,6 @@ package kv
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -414,14 +413,44 @@ func (s *Schema) CompareData(vID int, rows *sql.Rows) (bool, error) {
 	}
 	correct := s.Data[vID]
 	if len(data) != 1 {
-		return false, errors.New("data length not 1")
+		return false, fmt.Errorf("data length %d, expect 1", len(data))
 	}
 
+	var (
+		leftB  strings.Builder
+		rightB strings.Builder
+		same   = true
+		errMsg = ""
+	)
 	for i, column := range s.Columns {
 		left, right := data[0][i].ValString, column.Tp.ValToPureString(correct[i])
 		if left != right {
-			return false, fmt.Errorf("expect %s, got %s", left, right)
+			same = false
+			errMsg = fmt.Sprintf("expect %s, got %s", left, right)
 		}
+		if i != 0 {
+			leftB.WriteString(", ")
+			rightB.WriteString(", ")
+		}
+		leftB.WriteString(data[0][i].ValString)
+		rightB.WriteString(column.Tp.ValToPureString(correct[i]))
+	}
+	if !same {
+		return false, fmt.Errorf("%s\ndata:    %s\ncorrect: %s", errMsg, leftB.String(), rightB.String())
 	}
 	return true, nil
+}
+
+func (s *Schema) GetData(vID int) string {
+	var b strings.Builder
+
+	data := s.Data[vID]
+	for i, column := range s.Columns {
+		if i != 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(column.Tp.ValToString(data[i]))
+	}
+
+	return b.String()
 }

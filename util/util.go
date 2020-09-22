@@ -53,7 +53,7 @@ func RdTimestamp() string {
 }
 
 func RdName() string {
-	return namesgenerator.GetRandomName(0)
+	return namesgenerator.GetRandomName(RdRange(0, 1000))
 }
 
 func RdBool() bool {

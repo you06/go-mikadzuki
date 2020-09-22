@@ -5,25 +5,31 @@ import (
 	"fmt"
 	"math/rand"
 	"strings"
+	"sync"
 	"time"
 
-	"github.com/juju/errors"
+	"github.com/you06/go-mikadzuki/config"
 	"github.com/you06/go-mikadzuki/kv"
 	"github.com/you06/go-mikadzuki/util"
 )
 
 const MAX_RETRY = 10
-const WAIT_TIME = 5 * time.Millisecond
+const WAIT_TIME = 2 * time.Millisecond
 
 // Graph is the dependencies graph
 // all the timelines should begin with `Begin` and end with `Commit` or `Rollback`
 // the first transaction from each timeline should not depend on others
 type Graph struct {
+	cfg        *config.Config
 	allocID    int
 	timelines  []Timeline
 	dependency int
 	schema     *kv.Schema
 	order      []ActionLoc
+	graphMap   map[ActionTp]int
+	graphSum   int
+	dependMap  map[DependTp]int
+	dependSum  int
 }
 
 type ActionLoc struct {
@@ -31,14 +37,18 @@ type ActionLoc struct {
 	aID int
 }
 
-func NewGraph(kvManager *kv.Manager) Graph {
-	return Graph{
+func NewGraph(kvManager *kv.Manager, cfg *config.Config) *Graph {
+	g := Graph{
+		cfg:        cfg,
 		allocID:    0,
 		timelines:  []Timeline{},
 		dependency: 0,
 		schema:     kvManager.NewSchema(),
 		order:      []ActionLoc{},
 	}
+	g.CalcDependSum()
+	g.CalcGraphSum()
+	return &g
 }
 
 func (g *Graph) NewTimeline() *Timeline {
@@ -55,436 +65,383 @@ func (g *Graph) GetTimeline(n int) *Timeline {
 	return nil
 }
 
-func (g *Graph) AddDependency(dependTp DependTp) error {
-	ts := len(g.timelines)
-	if ts == 1 {
-		return errors.New("connot connect between 1 timeline")
+func (g *Graph) CalcGraphSum() {
+	graphMap := g.cfg.Graph.ToMap()
+	g.graphMap = make(map[ActionTp]int, len(actionTps))
+	g.graphSum = 0
+	for _, tp := range actionTps {
+		v := graphMap[string(tp)]
+		g.graphMap[tp] = v
+		g.graphSum += v
 	}
-	var (
-		t1       int
-		t2       int
-		a1       int
-		a2       int
-		actions1 []Action
-		actions2 []Action
-		action1  Action
-		action2  Action
-	)
-	for i := 0; i < MAX_RETRY; i++ {
-		t1 = rand.Intn(ts)
-		t2 = rand.Intn(ts)
-		for t1 == t2 {
-			t2 = rand.Intn(ts)
-		}
-		a1 = rand.Intn(len(g.timelines[t1].actions))
-		actions1 = g.GetTransaction(t1, a1)
-		a2 = rand.Intn(len(g.timelines[t2].actions))
-		actions2 = g.GetTransaction(t2, a2)
-		for j := 0; j < MAX_RETRY && actions2[0].id == 0; j++ {
-			a2 = rand.Intn(len(g.timelines[t2].actions))
-			actions2 = g.GetTransaction(t2, a2)
-		}
-		if actions2[0].id == 0 {
-			return errors.New("failed to get non-first transaction")
-		}
-		if len(g.timelines[t1].actions[a1].vIns) == 0 &&
-			len(g.timelines[t2].actions[a2].vIns) == 0 &&
-			dependTp.CheckValidFrom(g.timelines[t1].actions[a1].tp) &&
-			dependTp.CheckValidTo(g.timelines[t2].actions[a2].tp) {
-			if dependTp.CheckValidLastFrom(actions1[len(actions1)-1].tp) &&
-				dependTp.CheckValidLastTo(actions2[len(actions2)-1].tp) {
-				action1 = dependTp.GetActionFrom(actions1)
-				action2 = dependTp.GetActionTo(actions2)
-				if !g.IfCycle(t1, action1.id, t2, action2.id) {
-					g.ConnectTxnDepend(t1, action1.id, t2, action2.id, dependTp)
-					g.ConnectValueDepend(t1, a1, t2, a2, dependTp)
-					return nil
-				}
-			}
-		}
-		if i == MAX_RETRY-1 {
-			return errors.New("cannot find suitable action pair for creating dependency")
+}
+
+func (g *Graph) CalcDependSum() {
+	dependMap := g.cfg.Depend.ToMap()
+	g.dependMap = make(map[DependTp]int, len(dependTps))
+	g.dependSum = 0
+	for _, tp := range dependTps {
+		v := dependMap[string(tp)]
+		g.dependMap[tp] = v
+		g.dependSum += v
+	}
+}
+
+func (g *Graph) randActionTp() ActionTp {
+	rd := rand.Intn(g.graphSum)
+	for tp, v := range g.graphMap {
+		rd -= v
+		if rd < 0 {
+			return tp
 		}
 	}
 	panic("unreachable")
 }
 
-func (g *Graph) GetTransaction(t, a int) []Action {
-	timeline := g.timelines[t]
-	l, r := a, a
-	for {
-		if timeline.actions[l].tp == Begin {
-			break
+func (g *Graph) randDependTp() DependTp {
+	rd := rand.Intn(g.dependSum)
+	for tp, v := range g.dependMap {
+		rd -= v
+		if rd < 0 {
+			return tp
 		}
-		if l == 0 {
-			panic("txn begin not found")
-		}
-		l--
 	}
-	for {
-		tp := timeline.actions[r].tp
-		if tp == Commit || tp == Rollback {
-			break
-		}
-		if r == len(timeline.actions)-1 {
-			panic("txn begin not found")
-		}
-		r++
-	}
-	res := make([]Action, r-l+1)
-	copy(res, timeline.actions[l:r+1])
-	return res
+	panic("unreachable")
 }
 
-func (g *Graph) IfCycle(t1, a1, t2, a2 int) bool {
+func (g *Graph) NewKV(t int) {
+	pair := g.schema.NewKV()
+	txn := g.GetTimeline(t).GetTxn(0)
+	action := txn.NewActionWithTp(Insert)
+	g.AssignPair(pair, action)
+	g.Next(t, 0, pair, action, 0)
+}
+
+// Next tries finding no cycle next dependent txn recursively
+func (g *Graph) Next(t1, x1 int, pair *kv.KV, before *Action, depth int) {
+	var (
+		tp       ActionTp
+		dependTp DependTp
+		t2       int
+		x2       int
+		txn      *Txn
+	)
+	for i := 0; i < MAX_RETRY; i++ {
+		tp = g.randActionTp()
+		dependTp = DependTpFromActionTps(before.tp, tp)
+		for dependTp == RR {
+			tp = g.randActionTp()
+			dependTp = DependTpFromActionTps(before.tp, tp)
+		}
+		t2, x2, txn = g.RandTxn()
+		if !g.IfCycle(t1, x1, t2, x2, dependTp) {
+			break
+		}
+		if i == MAX_RETRY-1 {
+			return
+		}
+	}
+	action := txn.NewActionWithTp(tp)
+	action.ins = append(action.ins, Depend{
+		tID: t1,
+		xID: x1,
+		aID: before.id,
+		tp:  dependTp,
+	})
+	before.outs = append(before.outs, Depend{
+		tID: t2,
+		xID: x2,
+		aID: action.id,
+		tp:  dependTp,
+	})
+	if before.tp.IsRead() {
+		action.beforeWrite = before.beforeWrite
+	} else {
+		action.beforeWrite = Depend{
+			tID: t1,
+			xID: x1,
+			aID: before.id,
+			tp:  WW,
+		}
+	}
+	g.AssignPair(pair, action)
+	g.ConnectTxn(t1, x1, t2, x2, dependTp)
+	if util.RdBoolRatio(0.7 * float64(g.GetTimeline(t2).allocID) / float64(depth)) {
+		g.Next(t2, x2, pair, action, depth+1)
+	}
+}
+
+func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
+	switch action.tp {
+	case Select, SelectForUpdate:
+		action.SQL = pair.GetValueNoTxn(g.schema)
+	case Insert:
+		action.SQL = pair.NewValueNoTxn(g.schema)
+	case Update:
+		action.SQL = pair.PutValueNoTxn(g.schema)
+	case Delete:
+		action.SQL = pair.DelValueNoTxn(g.schema)
+	default:
+		panic(fmt.Sprintf("unsupport assign, ActionTp: %s", action.tp))
+	}
+	action.kID = pair.ID
+	action.vID = pair.Latest
+}
+
+func (g *Graph) RandTxn() (int, int, *Txn) {
+	t := rand.Intn(g.allocID)
+	timeline := g.GetTimeline(t)
+	x := rand.Intn(timeline.allocID)
+	return t, x, timeline.GetTxn(x)
+}
+
+func (g *Graph) IfCycle(t1, x1, t2, x2 int, tp DependTp) bool {
 	ts := len(g.timelines)
 	visited := make([][]bool, ts)
 	for i := 0; i < ts; i++ {
-		length := len(g.timelines[i].actions)
+		length := 2 * len(g.timelines[i].txns)
 		row := make([]bool, length)
 		for j := 0; j < length; j++ {
 			row[j] = false
 		}
 		visited[i] = row
 	}
-	var dfs func(t1, a1, t2, a2 int) bool
-	dfs = func(t1, a1, t2, a2 int) bool {
-		if t1 == t2 && a1 <= a2 {
-			return true
+
+	getInOut := func(t, x int) ([]Depend, []Depend) {
+		txn := g.GetTimeline(t).GetTxn(x / 2)
+		if x%2 == 0 {
+			return txn.startIns, txn.startOuts
 		}
-		if visited[t1][a1] {
+		return txn.endIns, txn.endOuts
+	}
+
+	var txn1Outs []Depend
+
+	var dfs func(int, int, int, int) bool
+
+	dfs = func(t1, x1, t2, x2 int) bool {
+		if !(x1 < 2*g.GetTimeline(t1).allocID) {
 			return false
 		}
-		visited[t1][a1] = true
-		nexts := g.timelines[t1].actions[a1].outs
-		for _, next := range nexts {
-			if dfs(next.tID, next.aID, t2, a2) {
+		if t1 == t2 && x1 <= x2 {
+			return true
+		}
+		if visited[t1][x1] {
+			return false
+		}
+		visited[t1][x1] = true
+		for _, out := range txn1Outs {
+			xID := 2 * out.xID
+			if out.tp.toToEnd() {
+				xID++
+			}
+			if out.tID == t1 && xID <= x1 {
+				return false
+			}
+		}
+		if dfs(t1, x1+1, t2, x2) {
+			return true
+		}
+		_, outs := getInOut(t1, x1)
+		for _, out := range outs {
+			xID := 2 * out.xID
+			if out.tp.toToEnd() {
+				xID += 1
+			}
+			if dfs(out.tID, xID, t2, x2) {
 				return true
 			}
 		}
 		return false
 	}
-	return dfs(t2, a2, t1, a1)
-}
 
-func (g *Graph) ConnectTxnDepend(t1, a1, t2, a2 int, tp DependTp) {
-	from := g.GetTimeline(t1).GetAction(a1)
-	to := g.GetTimeline(t2).GetAction(a2)
-	// avoid adding duplicated dependency
-	for _, out := range from.outs {
-		if out.tID == t2 && out.aID == a2 && out.tp == tp {
-			return
-		}
-	}
-	fmt.Println(tp, "connect txn depend from", t1, a1, "to", t2, a2, "success")
-
-	from.outs = append(from.outs, Depend{
-		tID: t2,
-		aID: a2,
-		tp:  tp,
-	})
-	to.ins = append(to.ins, Depend{
-		tID: t1,
-		aID: a1,
-		tp:  tp,
-	})
-}
-
-func (g *Graph) ConnectValueDepend(t1, a1, t2, a2 int, tp DependTp) {
-	from := g.GetTimeline(t1).GetAction(a1)
-	to := g.GetTimeline(t2).GetAction(a2)
-	fmt.Println(tp, "connect value depend from", t1, a1, "to", t2, a2, "success")
-	from.vOuts = append(from.vOuts, Depend{
-		tID: t2,
-		aID: a2,
-		tp:  tp,
-	})
-	to.vIns = append(to.vIns, Depend{
-		tID: t1,
-		aID: a1,
-		tp:  tp,
-	})
-}
-
-func (g *Graph) countNoDependAction() int {
-	cnt := 0
-	for _, timeline := range g.timelines {
-		for _, action := range timeline.actions {
-			if action.tp != Begin &&
-				action.tp != Commit &&
-				action.tp != Rollback {
-				if len(action.vIns) == 0 {
-					cnt += 1
-				}
-			}
-		}
-	}
-	return cnt
-}
-
-func (g *Graph) PushOrder(tID, aID int) {
-	g.order = append(g.order, ActionLoc{tID, aID})
-}
-
-func (g *Graph) getValueFromDepend(action *Action, txns *kv.Txns) (*kv.Txn, bool) {
-	before := g.GetTimeline(action.vIns[0].tID).GetAction(action.vIns[0].aID)
-	if !before.knowValue {
-		return nil, false
-	}
-	action.knowValue = true
-	txn := g.schema.KVs[before.kID].Begin()
-	util.AssertEQ(txn.KID, before.kID)
-	if action.tp.IsRead() {
-		action.kID = txn.KID
-		action.vID = before.vID
-		util.AssertNE(before.vID, kv.INVALID_VALUE_ID)
-		// there we should consider internal read first
-		timeline := g.GetTimeline(action.tID)
-		for i := action.id - 1; i >= 0; i-- {
-			internal := timeline.GetAction(i)
-			if internal.tp == Begin {
-				break
-			} else if internal.tp.IsWrite() {
-				if internal.kID == txn.KID {
-					action.vID = internal.vID
-					return txn, true
-				}
-			}
-		}
-		txn.Latest = before.vID
-		txns.Push(txn)
-	} else if action.tp.IsWrite() {
-		switch action.tp {
-		case Insert:
-			// may use the old index value to make it a real dependency
-			kv := g.schema.NewKV()
-			txn = kv.Begin()
-			action.SQL = txn.NewValue(g.schema)
-		case Update:
-			action.SQL = txn.PutValue(g.schema)
-		case Delete:
-			action.SQL = txn.DelValue(g.schema)
-		}
-		util.AssertNE(txn.Latest, kv.INVALID_VALUE_ID)
-		action.kID = before.kID
-		action.vID = txn.Latest
-		txns.Push(txn)
-	} else {
+	switch tp {
+	case WW:
+		_, txn1Outs = getInOut(t1, 2*x1+1)
+		return dfs(t2, 2*x2+1, t1, 2*x1+1)
+	case WR:
+		_, txn1Outs = getInOut(t1, 2*x1+1)
+		return dfs(t2, 2*x2, t1, 2*x1+1)
+	case RW:
+		_, txn1Outs = getInOut(t1, 2*x1)
+		return dfs(t2, 2*x2+1, t1, 2*x1)
+	default:
 		panic("unreachable")
 	}
-	util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
-	return txn, true
 }
 
-// MakeLinearKV assign values for actions via value dependencies
-func (g *Graph) MakeLinearKV() {
-	ts := len(g.timelines)
-	progress := make([]int, ts)
-	// initKVs for quick get Realtime dependent KV
-	initKVs := make([]*kv.KV, ts)
-	for i := 0; i < ts; i++ {
-		initKVs[i] = g.schema.NewKV()
+func (g *Graph) ConnectTxn(t1, x1, t2, x2 int, tp DependTp) {
+	txn1 := g.GetTimeline(t1).GetTxn(x1)
+	txn2 := g.GetTimeline(t2).GetTxn(x2)
+	depend1 := Depend{
+		tID: t2,
+		xID: x2,
+		tp:  tp,
 	}
-	// init values for first transactions
-	for i := 0; i < ts; i++ {
-		timeline := g.GetTimeline(i)
-		txns := kv.Txns([]*kv.Txn{initKVs[i].Begin()})
-		progress[i] = 0
-		for {
-			action := timeline.GetAction(progress[i])
-			action.knowValue = true
-			if action.tp == Commit {
-				txns.Commit()
-				break
-			} else if action.tp == Rollback {
-				txns.Rollback()
-				break
-			}
-			txn := txns.Rand()
-			if action.tp.IsWrite() {
-				switch action.tp {
-				case Insert:
-					if txn.Latest != kv.NULL_VALUE_ID {
-						txn = g.schema.NewKV().Begin()
-					}
-					action.SQL = txn.NewValue(g.schema)
-				case Update:
-					action.SQL = txn.PutValue(g.schema)
-				case Delete:
-					action.SQL = txn.DelValue(g.schema)
-				}
-				action.kID = txn.KID
-				action.vID = txn.Latest
-			} else if action.tp.IsRead() {
-				action.kID = txn.KID
-				action.vID = txn.Latest
-			}
-			progress[i] += 1
-		}
+	depend2 := Depend{
+		tID: t1,
+		xID: x1,
+		tp:  tp,
 	}
-
-	// txnsStore keeps transaction breaks by dependency in generation
-	txnsStore := make(map[int]*kv.Txns)
-	waitActions := make([]map[int]struct{}, ts)
-	for i := 0; i < ts; i++ {
-		waitActions[i] = make(map[int]struct{})
+	if tp.toFromBegin() {
+		txn1.startOuts = append(txn1.startOuts, depend1)
+	} else {
+		txn1.endOuts = append(txn1.endOuts, depend1)
 	}
-	txnStatus := make([]ActionTp, ts)
-	for {
-		done := true
-		for i := 0; i < ts; i++ {
-			timeline := g.GetTimeline(i)
-			var txns kv.Txns
-			if t, ok := txnsStore[i]; ok {
-				txns = *t
-			} else {
-				txns = []*kv.Txn{initKVs[i].Begin()}
-				txnsStore[i] = &txns
-			}
-			if len(waitActions[i]) != 0 {
-				var doneActionsIDs []int
-				for id := range waitActions[i] {
-					action := timeline.GetAction(id)
-					// although we can suppose the txn added here is never used again
-					// but add txn into txns break the internal order
-					if _, ok := g.getValueFromDepend(action, &txns); ok {
-						doneActionsIDs = append(doneActionsIDs, id)
-						// switch txnStatus[i] {
-						// case Commit:
-						// 	t.Commit()
-						// case Rollback:
-						// 	t.Rollback()
-						// }
-						util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
-					}
-				}
-				for _, id := range doneActionsIDs {
-					delete(waitActions[i], id)
-				}
-				if len(waitActions[i]) == 0 {
-					delete(txnsStore, i)
-				}
-				done = false
-				continue
-			}
-			if progress[i] == timeline.allocID-1 {
-				continue
-			}
-			for {
-				progress[i] += 1
-				action := timeline.GetAction(progress[i])
-				if action.tp == Commit {
-					txns.Commit()
-					txnStatus[i] = Commit
-					break
-				} else if action.tp == Rollback {
-					txns.Rollback()
-					txnStatus[i] = Rollback
-					break
-				} else if len(action.vIns) > 0 {
-					if t, ok := g.getValueFromDepend(action, &txns); !ok {
-						// this should be retry in next loop
-						waitActions[i][progress[i]] = struct{}{}
-						continue
-					} else {
-						util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
-						txns.Push(t)
-					}
-				} else {
-					txn := txns.Rand()
-					if action.tp.IsRead() {
-						action.kID = txn.KID
-						action.vID = txn.Latest
-					} else if action.tp.IsWrite() {
-						switch action.tp {
-						case Insert:
-							kv := g.schema.NewKV()
-							txn = kv.Begin()
-							txns.Push(txn)
-							action.SQL = txn.NewValue(g.schema)
-						case Update:
-							action.SQL = txn.PutValue(g.schema)
-						case Delete:
-							action.SQL = txn.DelValue(g.schema)
-						}
-						action.kID = txn.KID
-						action.vID = txn.Latest
-					}
-					action.knowValue = true
-				}
-			}
-			if len(waitActions[i]) == 0 {
-				delete(txnsStore, i)
-			}
-			done = false
-		}
-		if done {
-			break
-		}
-	}
-
-	// generate all select SQLs and check if there are invalid value ids
-	for i := 0; i < ts; i++ {
-		timeline := g.GetTimeline(i)
-		as := len(timeline.actions)
-		for j := 0; j < as; j++ {
-			action := timeline.GetAction(j)
-			if action.tp.IsWrite() {
-				util.AssertNE(action.vID, kv.INVALID_VALUE_ID)
-			} else if action.tp.IsRead() {
-				switch action.tp {
-				case Select:
-					action.SQL = g.schema.SelectSQL(action.vID)
-				}
-			} else {
-				switch action.tp {
-				case Begin:
-					action.SQL = "BEGIN"
-				case Commit:
-					action.SQL = "COMMIT"
-				case Rollback:
-					action.SQL = "ROLLBACK"
-				}
-			}
-		}
+	if tp.toToBegin() {
+		txn2.startIns = append(txn2.startIns, depend2)
+	} else {
+		txn2.endIns = append(txn2.endIns, depend2)
 	}
 }
 
+// IterateGraph goes over the graph and exec it by given sequence
+// Since transaction is atomic, we only care about the WW value dependency here
+// Commit/Rollback
+//   i.   txns it RW depends on
+//   ii.  itself
+//   iii. Begin txns WR depend on it
+//   iv.  Commit/Rollback txns WW depend on it
+//   Commit/Rollback txns should check if there are Begin txns need to be waited before committing
+//   should avoid any txns being committed between ii and iii, unless it will pollute value dependency
+// Begin
+//   i.   txns it WR depends on(only WR here)
+//   ii.  itself
+//   iii. txns RW depend on it(only RW here)
 func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *sql.Result, error)) error {
 	errCh := make(chan error)
 	doneCh := make(chan struct{})
-	for i := 0; i < len(g.timelines); i++ {
+	var checkMutex sync.Mutex
+	var txnMutex sync.Mutex
+	var control sync.RWMutex
+	progress := make([]int, len(g.timelines))
+	ticker := util.NewTicker(time.Second)
+	ticker.Go(func() {
+		fmt.Println(progress)
+	})
+	for i := 0; i < g.allocID; i++ {
+		progress[i] = 0
 		go func(i int) {
 			var (
 				rows   *sql.Rows
 				err    error
+				txn    *Txn
 				action *Action
 			)
 			timeline := g.GetTimeline(i)
-			for j := 0; j < len(timeline.actions); j++ {
-				action = timeline.GetAction(j)
-				for _, depend := range action.ins {
-					for !g.GetTimeline(depend.tID).GetAction(depend.aID).ifExec {
+
+			timeline.GetTxn(0).SetReady(true)
+			for j := 0; j < timeline.allocID; j++ {
+				progress[i]++
+				ticker.Tick()
+				txn = timeline.GetTxn(j)
+
+				for _, depend := range txn.startIns {
+					before := g.GetTimeline(depend.tID).GetTxn(depend.xID)
+					// waitTime := 1
+					for (depend.tp.toFromBegin() && !before.GetStart()) ||
+						(depend.tp.toFromEnd() && !before.GetEnd()) {
 						time.Sleep(WAIT_TIME)
+						// waitTime += 1
+						// if waitTime%1500 == 0 {
+						// 	fmt.Printf("p2 (%d, %d) %s waiting for (%d, %d) done, progress: %v\n", i, txn.id, depend.tp, depend.tID, depend.xID, progress)
+						// }
 					}
 				}
-				rows, _, err = exec(i, action.id, action.tp, action.SQL)
-				if err != nil {
+
+				txnMutex.Lock()
+				if !txn.GetStart() {
+					if _, _, err = exec(i, progress[i]-1, Begin, "BEGIN"); err != nil {
+						errCh <- err
+						return
+					}
+					txn.SetStart(true)
+				}
+				txnMutex.Unlock()
+
+				for k := 0; k < txn.allocID; k++ {
+					progress[i]++
+					ticker.Tick()
+					control.RLock()
+					action = txn.GetAction(k)
+					control.RUnlock()
+					// WW value dependency
+					if action.tp.IsWrite() && action.beforeWrite != INVALID_DEPEND {
+						depend := action.beforeWrite
+						// waitTime := 1
+						for !g.GetTimeline(depend.tID).GetTxn(depend.xID).GetAction(depend.aID).GetExec() {
+							time.Sleep(WAIT_TIME)
+							// waitTime += 1
+							// if waitTime%1500 == 0 {
+							// 	fmt.Printf("p1 (%d, %d, %d) %s waiting for (%d, %d, %d) done, progress: %v\n", i, action.xID, action.id, depend.tp, depend.tID, depend.xID, depend.aID, progress)
+							// }
+						}
+					}
+
+					rows, _, err = exec(i, progress[i]-1, action.tp, action.SQL)
+
+					if err != nil {
+						errCh <- err
+						return
+					}
+					switch action.tp {
+					case Select:
+						if same, err := g.schema.CompareData(action.vID, rows); !same {
+							control.Lock()
+							if strings.Contains(err.Error(), "data length 0, expect 1") {
+								g.TraceEmpty(action, exec)
+							}
+							errCh <- fmt.Errorf("%s got %s", action.SQL, err.Error())
+							control.Unlock()
+						}
+					}
+					action.SetExec(true)
+					if next := txn.GetAction(k + 1); next != nil {
+						next.SetReady(true)
+					}
+				}
+				progress[i]++
+
+				for _, depend := range txn.endIns {
+					before := g.GetTimeline(depend.tID).GetTxn(depend.xID)
+					// waitTime := 1
+					for (depend.tp.toFromBegin() && !before.GetStart()) ||
+						(depend.tp.toFromEnd() && !before.GetEnd()) {
+						next := g.GetTimeline(depend.tID).GetTxn(depend.xID)
+						for !next.GetReady() {
+							time.Sleep(WAIT_TIME)
+							// waitTime += 1
+							// if waitTime%1500 == 0 {
+							// 	fmt.Printf("p3 (%d, %d) %s waiting for (%d, %d) ready, progress: %v\n", i, txn.id, depend.tp, next.tID, next.id, progress)
+							// }
+						}
+					}
+				}
+				txnMutex.Lock()
+				if _, _, err := exec(txn.tID, progress[i]-1, txn.EndTp(), txn.EndSQL()); err != nil {
 					errCh <- err
-					return
 				}
-				switch action.tp {
-				case Select:
-					if same, err := g.schema.CompareData(action.vID, rows); !same {
-						errCh <- fmt.Errorf("%s got %s", action.SQL, err.Error())
+				for _, depend := range txn.endIns {
+					if depend.tp == WR {
+						next := g.GetTimeline(depend.tID).GetTxn(depend.xID)
+						if _, _, err := exec(depend.tID, progress[depend.tID]-1, Begin, "BEGIN"); err != nil {
+							errCh <- err
+						}
+						next.SetStart(true)
 					}
 				}
-				action.ifExec = true
+				txn.SetEnd(true)
+				if next := timeline.GetTxn(j + 1); next != nil {
+					next.SetReady(true)
+				}
+				txnMutex.Unlock()
 			}
 			// check if all done
+			checkMutex.Lock()
+			defer checkMutex.Unlock()
 			for i := 0; i < len(g.timelines); i++ {
 				timeline := g.GetTimeline(i)
-				if !timeline.GetAction(len(timeline.actions) - 1).ifExec {
+				if !timeline.GetTxn(timeline.allocID - 1).GetEnd() {
 					return
 				}
 			}
@@ -500,6 +457,61 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 			return nil
 		}
 	}
+}
+
+func (g *Graph) TraceEmpty(action *Action, exec func(int, int, ActionTp, string) (*sql.Rows, *sql.Result, error)) {
+	fmt.Printf("Executed SQL got empty: %s\n", action.SQL)
+	fmt.Printf("Correct data of (%d, %d, %d): %s\n", action.tID, action.xID, action.id, g.schema.GetData(action.vID))
+	for _, depend := range action.ins {
+		before := g.GetTimeline(depend.tID).GetTxn(depend.xID).GetAction(depend.aID)
+		if before.vID == action.vID {
+			fmt.Printf("It depends on (%d, %d, %d, %s)\n", before.tID, before.xID, before.id, before.tp)
+		}
+	}
+
+	var b strings.Builder
+	fmt.Print("Same key id actions:")
+	for i := 0; i < g.allocID; i++ {
+		t := g.GetTimeline(i)
+		for j := 0; j < t.allocID; j++ {
+			x := t.GetTxn(j)
+			for k := 0; k < x.allocID; k++ {
+				a := x.GetAction(k)
+				if a.kID == action.kID {
+					fmt.Printf(" (%d, %d, %d, %s)", a.tID, a.xID, a.id, a.tp)
+					if a.tp.IsWrite() && a.vID != kv.NULL_VALUE_ID {
+						selectSQL := g.schema.SelectSQL(a.vID)
+						rows, _, err := exec(-1, a.id, Select, selectSQL)
+						if err == nil {
+							if same, _ := g.schema.CompareData(a.vID, rows); same {
+								fmt.Fprintf(&b, "(%d, %d, %d, %s)'s value still alive, SQL: %s\n", a.tID, a.xID, a.id, a.tp, selectSQL)
+							}
+						} else {
+							fmt.Fprintf(&b, "(%d, %d, %d, %s) exec error, error: %s\n", a.tID, a.xID, a.id, a.tp, err.Error())
+						}
+					}
+				}
+			}
+		}
+	}
+	fmt.Print("\n")
+	fmt.Print(b.String())
+}
+
+func (g *Graph) MaxAction() int {
+	m := 0
+	for i := 0; i < g.allocID; i++ {
+		timeline := g.GetTimeline(i)
+		c := 0
+		for j := 0; j < timeline.allocID; j++ {
+			c += 2
+			c += timeline.GetTxn(j).allocID
+		}
+		if c > m {
+			m = c
+		}
+	}
+	return m
 }
 
 func (g *Graph) String() string {

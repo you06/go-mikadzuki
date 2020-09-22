@@ -3,6 +3,7 @@ package graph
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/you06/go-mikadzuki/kv"
 )
@@ -10,15 +11,13 @@ import (
 type Action struct {
 	id  int
 	tID int
+	xID int
 	tp  ActionTp
 	// outs & ins are transaction dependencies,
-	// which should only exist in Begin, Commit and Rollback actions
-	outs []Depend
-	ins  []Depend
-	// vOuts & vIns are value dependencies,
-	// which should only exist in DML actions
-	vOuts []Depend
-	vIns  []Depend
+	// record WW dependency
+	outs        []Depend
+	ins         []Depend
+	beforeWrite Depend
 	// key id, when it's -1, it means the key is not specified yet
 	kID int
 	// value id, can find out value from kv.Schema
@@ -27,17 +26,29 @@ type Action struct {
 	vID       int
 	knowValue bool
 	SQL       string
+	lock      *sync.RWMutex
 	ifExec    bool
+	ifReady   bool
 }
 
 type ActionTp string
 
 type DependTp string
 
+type Status string
+
 type Depend struct {
 	tID int
+	xID int
 	aID int
 	tp  DependTp
+}
+
+var INVALID_DEPEND = Depend{
+	tID: -1,
+	xID: -1,
+	aID: -1,
+	tp:  WW,
 }
 
 var (
@@ -65,6 +76,8 @@ var (
 	RW        DependTp = "RW"
 	WW        DependTp = "WW"
 	WR        DependTp = "WR"
+	RR        DependTp = "RR"
+	WRCommit  DependTp = "WRCommit"
 	Realtime  DependTp = "Realtime"
 	NotInit   DependTp = "NotInit"
 	dependTps          = []DependTp{
@@ -75,37 +88,47 @@ var (
 	}
 )
 
-func NewAction(id, tID int, tp ActionTp) Action {
+var (
+	Committed  Status = "Committed"
+	Rollbacked Status = "Rollbacked"
+)
+
+func NewAction(id, tID, xID int, tp ActionTp) Action {
 	return Action{
-		id:        id,
-		tID:       tID,
-		tp:        tp,
-		outs:      []Depend{},
-		ins:       []Depend{},
-		vOuts:     []Depend{},
-		vIns:      []Depend{},
-		knowValue: false,
-		vID:       kv.INVALID_VALUE_ID,
-		SQL:       "",
-		ifExec:    false,
+		id:          id,
+		tID:         tID,
+		xID:         xID,
+		tp:          tp,
+		outs:        []Depend{},
+		ins:         []Depend{},
+		beforeWrite: INVALID_DEPEND,
+		knowValue:   false,
+		vID:         kv.INVALID_VALUE_ID,
+		SQL:         "",
+		lock:        &sync.RWMutex{},
+		ifExec:      false,
+		ifReady:     false,
 	}
 }
 
 func (a ActionTp) IsRead() bool {
-	if a == Select ||
-		a == SelectForUpdate {
-		return true
-	}
-	return false
+	return a == Select || a == SelectForUpdate
 }
 
 func (a ActionTp) IsWrite() bool {
-	if a == Insert ||
-		a == Update ||
-		a == Delete {
-		return true
-	}
-	return false
+	return a == Insert || a == Update || a == Delete
+}
+
+func (a ActionTp) IsTxnBegin() bool {
+	return a == Begin
+}
+
+func (a ActionTp) IsTxnEnd() bool {
+	return a == Commit || a == Rollback
+}
+
+func (a ActionTp) IsTxn() bool {
+	return a.IsTxnBegin() || a.IsTxnEnd()
 }
 
 func (d DependTp) CheckValidFrom(tp ActionTp) bool {
@@ -135,10 +158,10 @@ func (d DependTp) CheckValidLastFrom(tp ActionTp) bool {
 
 func (d DependTp) GetActionFrom(actions []Action) Action {
 	switch d {
-	case WR, WW:
-		return actions[len(actions)-1]
 	case RW:
 		return actions[0]
+	case WR, WW:
+		return actions[len(actions)-1]
 	default:
 		panic("unreachable")
 	}
@@ -180,23 +203,80 @@ func (d DependTp) GetActionTo(actions []Action) Action {
 	}
 }
 
+func (d DependTp) toFromBegin() bool {
+	switch d {
+	case RW:
+		return true
+	}
+	return false
+}
+
+func (d DependTp) toFromEnd() bool {
+	return !d.toFromBegin()
+}
+
+func (d DependTp) toToBegin() bool {
+	switch d {
+	case WR:
+		return true
+	}
+	return false
+}
+
+func (d DependTp) toToEnd() bool {
+	return !d.toToBegin()
+}
+
+func DependTpFromActionTps(t1, t2 ActionTp) DependTp {
+	if t1.IsRead() {
+		if t2.IsRead() {
+			return RR
+		} else if t2.IsWrite() {
+			return RW
+		}
+	} else if t1.IsWrite() {
+		if t2.IsRead() {
+			return WR
+		} else if t2.IsWrite() {
+			return WW
+		}
+	}
+	panic(fmt.Sprintf("unsuppert ActionTp %s, %s", t1, t2))
+}
+
+func (a *Action) SetExec(b bool) {
+	a.lock.Lock()
+	a.ifExec = b
+	a.lock.Unlock()
+}
+
+func (a *Action) GetExec() bool {
+	a.lock.RLock()
+	defer a.lock.RUnlock()
+	return a.ifExec
+}
+
+func (a *Action) SetReady(b bool) {
+	a.lock.Lock()
+	a.ifReady = b
+	a.lock.Unlock()
+}
+
+func (a *Action) GetReady() bool {
+	a.lock.RLock()
+	defer a.lock.RUnlock()
+	return a.ifReady
+}
+
 func (a *Action) String() string {
 	var b strings.Builder
 	b.WriteString(string(a.tp))
-	if a.tp.IsRead() || a.tp.IsWrite() {
-		fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
-		for _, d := range a.vIns {
-			fmt.Fprintf(&b, "[%d, %d]", d.tID, d.aID)
-		}
-		for _, d := range a.vOuts {
-			fmt.Fprintf(&b, "{%d, %d}", d.tID, d.aID)
-		}
-	} else {
-		for _, d := range a.ins {
-			if d.tID != a.tID {
-				fmt.Fprintf(&b, "[%d, %d]", d.tID, d.aID)
-			}
-		}
+	fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
+	for _, d := range a.ins {
+		fmt.Fprintf(&b, "[%d, %d, %d]", d.tID, d.xID, d.aID)
+	}
+	for _, d := range a.outs {
+		fmt.Fprintf(&b, "{%d, %d, %d}", d.tID, d.xID, d.aID)
 	}
 	return b.String()
 }

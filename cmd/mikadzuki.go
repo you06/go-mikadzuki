@@ -16,9 +16,9 @@ var (
 	cfgFile string
 )
 
-var rootCmd = &cobra.Command{
-	Use:   "MIKADZUKI 🌙",
-	Short: "MIKADZUKI is a parallel transaction test tool",
+var mikadzukiCmd = &cobra.Command{
+	Use:   "go",
+	Short: "🌙 MIKADZUKI is a parallel transaction test tool",
 	Long:  ``,
 	Run: func(cmd *cobra.Command, args []string) {
 		cfg := config.NewConfig()
@@ -30,7 +30,6 @@ var rootCmd = &cobra.Command{
 		go func() {
 			sc := make(chan os.Signal, 1)
 			signal.Notify(sc,
-				os.Kill,
 				os.Interrupt,
 				syscall.SIGHUP,
 				syscall.SIGINT,
@@ -52,12 +51,5 @@ var rootCmd = &cobra.Command{
 }
 
 func init() {
-	rootCmd.Flags().StringVar(&cfgFile, "config", "config.toml", "config file")
-}
-
-func mikadzukiExecute() {
-	if err := rootCmd.Execute(); err != nil {
-		fmt.Println(err)
-		os.Exit(1)
-	}
+	mikadzukiCmd.Flags().StringVar(&cfgFile, "config", "config.toml", "config file")
 }

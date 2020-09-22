@@ -8,6 +8,7 @@ import (
 )
 
 type Generator struct {
+	cfg          *config.Config
 	globalConfig *config.Global
 	graphConfig  *config.Graph
 	dependConfig *config.Depend
@@ -20,6 +21,7 @@ type Generator struct {
 
 func NewGenerator(kvManager *kv.Manager, cfg *config.Config) Generator {
 	generator := Generator{
+		cfg:          cfg,
 		globalConfig: &cfg.Global,
 		graphConfig:  &cfg.Graph,
 		dependConfig: &cfg.Depend,
@@ -76,52 +78,20 @@ func (g *Generator) randDependTp() DependTp {
 	panic("unreachable")
 }
 
-func (g *Generator) NewGraph(conn, length int) Graph {
+func (g *Generator) NewGraph(conn, length int) *Graph {
 	g.kvManager.Reset()
-	graph := NewGraph(g.kvManager)
+	graph := NewGraph(g.kvManager, g.cfg)
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
-		var (
-			beforeTp ActionTp
-			tp       ActionTp
-		)
 		for j := 0; j < length; j++ {
-			// start from begin and stop as commit
-			if j == 0 {
-				tp = Begin
-			} else if j == length-1 {
-				if beforeTp == Commit || beforeTp == Rollback {
-					break
-				}
-				tp = Commit
-			} else {
-				tp = Begin
-				if beforeTp != Commit && beforeTp != Rollback {
-					for tp == Begin {
-						tp = g.randActionTp()
-					}
-				}
-			}
-			timeline.NewACtionWithTp(tp)
-			beforeTp = tp
+			// TODO: random txn status
+			_ = timeline.NewTxnWithStatus(Committed)
 		}
 	}
-	// we add dependency as more as possible
-	failedCnt := 0
-OUTER:
-	for {
-		failedCnt = 0
-		for {
-			if err := graph.AddDependency(g.randDependTp()); err != nil {
-				failedCnt += 1
-				if failedCnt >= MAX_RETRY {
-					break OUTER
-				}
-			} else {
-				break
-			}
-		}
+
+	for i := 0; i < conn; i++ {
+		graph.NewKV(i)
 	}
-	graph.MakeLinearKV()
+
 	return graph
 }

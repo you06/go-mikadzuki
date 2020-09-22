@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/you06/go-mikadzuki/util"
+
 	"github.com/you06/go-mikadzuki/config"
 	"github.com/you06/go-mikadzuki/db"
 	"github.com/you06/go-mikadzuki/graph"
@@ -48,7 +50,10 @@ func (m *Manager) Once() error {
 		return err
 	}
 	g := m.graphMgr.NewGraph(m.cfg.Global.Thread, m.cfg.Global.Action)
-	logs := NewExecutionLog(m.cfg.Global.Thread, m.cfg.Global.Action)
+	logs := NewExecutionLog(m.cfg.Global.Thread, g.MaxAction())
+	if m.cfg.Global.LogPath != "" {
+		m.DumpGraph(g)
+	}
 	for _, stmt := range g.GetSchemas() {
 		fmt.Println(stmt)
 		if _, err := m.db.Exec(stmt); err != nil {
@@ -63,43 +68,53 @@ func (m *Manager) Once() error {
 			res  *sql.Result
 			err  error
 		)
-		logs.LogStart(tID, aID, tp, sqlStmt)
+		if tID >= 0 {
+			logs.LogStart(tID, aID, tp, sqlStmt)
+		}
 		switch tp {
 		case graph.Begin:
 			txns[tID], err = m.db.Begin()
 		case graph.Commit:
+			if txns[tID] == nil {
+				fmt.Printf("nil txn (%d, %d)\n", tID, aID)
+			}
 			err = txns[tID].Commit()
 			txns[tID] = nil
 		case graph.Rollback:
+			if txns[tID] == nil {
+				fmt.Printf("nil txn (%d, %d)\n", tID, aID)
+			}
 			err = txns[tID].Rollback()
 			txns[tID] = nil
 		case graph.Select:
-			txn := txns[tID]
-			if txn == nil {
-				panic("txn is nil")
+			// -1 tID is for tracing bug
+			if tID == -1 {
+				rows, err = m.db.Query(sqlStmt)
+				return rows, res, err
+			} else {
+				txn := txns[tID]
+				util.AssertNotNil(txn)
+				rows, err = txns[tID].Query(sqlStmt)
 			}
-			rows, err = txns[tID].Query(sqlStmt)
 		default:
 			txn := txns[tID]
-			if txn == nil {
-				panic("txn is nil")
-			}
+			util.AssertNotNil(txn)
 			res, err = txn.Exec(sqlStmt)
 		}
-		if err == nil {
-			logs.LogSuccess(tID, aID)
+		if err != nil {
+			logs.LogFail(tID, aID, err)
 		} else {
-			logs.LogFail(tID, aID)
+			logs.LogSuccess(tID, aID)
 		}
 		return rows, res, err
 	}); err != nil {
 		if m.cfg.Global.LogPath != "" {
-			m.DumpResult(&g, logs)
+			m.DumpResult(logs)
 		}
 		return err
 	} else {
 		if m.cfg.Global.LogPath != "" {
-			m.DumpResult(&g, logs)
+			m.DumpResult(logs)
 		}
 	}
 	if err := m.closeDB(); err != nil {

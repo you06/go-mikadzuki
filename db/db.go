@@ -6,6 +6,7 @@ type DB interface {
 	Begin() (Txn, error)
 	Close() error
 	Exec(string) (*sql.Result, error)
+	Query(string) (*sql.Rows, error)
 }
 
 type Txn interface {
