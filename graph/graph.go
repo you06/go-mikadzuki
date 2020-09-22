@@ -14,7 +14,7 @@ import (
 )
 
 const MAX_RETRY = 10
-const WAIT_TIME = 5 * time.Millisecond
+const WAIT_TIME = 2 * time.Millisecond
 
 // Graph is the dependencies graph
 // all the timelines should begin with `Begin` and end with `Commit` or `Rollback`
