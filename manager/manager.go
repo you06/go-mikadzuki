@@ -50,9 +50,9 @@ func (m *Manager) Once() error {
 		return err
 	}
 	g := m.graphMgr.NewGraph(m.cfg.Global.Thread, m.cfg.Global.Action)
-	logs := NewExecutionLog(m.cfg.Global.Thread, m.cfg.Global.Action)
+	logs := NewExecutionLog(m.cfg.Global.Thread, g.MaxAction())
 	if m.cfg.Global.LogPath != "" {
-		m.DumpGraph(&g)
+		m.DumpGraph(g)
 	}
 	for _, stmt := range g.GetSchemas() {
 		fmt.Println(stmt)
@@ -68,6 +68,7 @@ func (m *Manager) Once() error {
 			res  *sql.Result
 			err  error
 		)
+		// fmt.Println(tID, aID, tp)
 		if tID >= 0 {
 			logs.LogStart(tID, aID, tp, sqlStmt)
 		}

@@ -54,6 +54,29 @@ func (k *KV) Begin() *Txn {
 	}
 }
 
+func (k *KV) GetValueNoTxn(s *Schema) string {
+	return s.SelectSQL(k.Latest)
+}
+
+func (k *KV) NewValueNoTxn(s *Schema) string {
+	v := s.NewValue(k.ID)
+	k.Latest = v
+	return s.InsertSQL(v)
+}
+
+func (k *KV) PutValueNoTxn(s *Schema) string {
+	oldID := k.Latest
+	newID := s.PutValue(k.ID, oldID)
+	k.Latest = newID
+	return s.UpdateSQL(oldID, newID)
+}
+
+func (k *KV) DelValueNoTxn(s *Schema) string {
+	id := k.Latest
+	k.Latest = NULL_VALUE_ID
+	return s.DeleteSQL(id)
+}
+
 func (k *KV) NewValue(v int) {
 	k.Latest = v
 	k.Values[v] = struct{}{}

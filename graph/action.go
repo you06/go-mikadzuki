@@ -11,15 +11,12 @@ import (
 type Action struct {
 	id  int
 	tID int
+	xID int
 	tp  ActionTp
 	// outs & ins are transaction dependencies,
-	// which should only exist in Begin, Commit and Rollback actions
+	// record WW dependency
 	outs []Depend
 	ins  []Depend
-	// vOuts & vIns are value dependencies,
-	// which should only exist in DML actions
-	vOuts []Depend
-	vIns  []Depend
 	// key id, when it's -1, it means the key is not specified yet
 	kID int
 	// value id, can find out value from kv.Schema
@@ -41,6 +38,7 @@ type Status string
 
 type Depend struct {
 	tID int
+	xID int
 	aID int
 	tp  DependTp
 }
@@ -70,6 +68,7 @@ var (
 	RW        DependTp = "RW"
 	WW        DependTp = "WW"
 	WR        DependTp = "WR"
+	RR        DependTp = "RR"
 	WRCommit  DependTp = "WRCommit"
 	Realtime  DependTp = "Realtime"
 	NotInit   DependTp = "NotInit"
@@ -86,15 +85,14 @@ var (
 	Rollbacked Status = "Rollbacked"
 )
 
-func NewAction(id, tID int, tp ActionTp) Action {
+func NewAction(id, tID, xID int, tp ActionTp) Action {
 	return Action{
 		id:        id,
 		tID:       tID,
+		xID:       xID,
 		tp:        tp,
 		outs:      []Depend{},
 		ins:       []Depend{},
-		vOuts:     []Depend{},
-		vIns:      []Depend{},
 		knowValue: false,
 		vID:       kv.INVALID_VALUE_ID,
 		SQL:       "",
@@ -151,10 +149,10 @@ func (d DependTp) CheckValidLastFrom(tp ActionTp) bool {
 
 func (d DependTp) GetActionFrom(actions []Action) Action {
 	switch d {
-	case WR, WW:
-		return actions[len(actions)-1]
 	case RW:
 		return actions[0]
+	case WR, WW:
+		return actions[len(actions)-1]
 	default:
 		panic("unreachable")
 	}
@@ -196,6 +194,47 @@ func (d DependTp) GetActionTo(actions []Action) Action {
 	}
 }
 
+func (d DependTp) toFromBegin() bool {
+	switch d {
+	case RW:
+		return true
+	}
+	return false
+}
+
+func (d DependTp) toFromEnd() bool {
+	return !d.toFromBegin()
+}
+
+func (d DependTp) toToBegin() bool {
+	switch d {
+	case WR:
+		return true
+	}
+	return false
+}
+
+func (d DependTp) toToEnd() bool {
+	return !d.toToBegin()
+}
+
+func DependTpFromActionTps(t1, t2 ActionTp) DependTp {
+	if t1.IsRead() {
+		if t2.IsRead() {
+			return RR
+		} else if t2.IsWrite() {
+			return RW
+		}
+	} else if t1.IsWrite() {
+		if t2.IsRead() {
+			return WR
+		} else if t2.IsWrite() {
+			return WW
+		}
+	}
+	panic(fmt.Sprintf("unsuppert ActionTp %s, %s", t1, t2))
+}
+
 func (a *Action) SetExec(b bool) {
 	a.lock.Lock()
 	a.ifExec = b
@@ -223,20 +262,12 @@ func (a *Action) GetReady() bool {
 func (a *Action) String() string {
 	var b strings.Builder
 	b.WriteString(string(a.tp))
-	if a.tp.IsRead() || a.tp.IsWrite() {
-		fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
-		for _, d := range a.vIns {
-			fmt.Fprintf(&b, "[%d, %d]", d.tID, d.aID)
-		}
-		for _, d := range a.vOuts {
-			fmt.Fprintf(&b, "{%d, %d}", d.tID, d.aID)
-		}
-	} else {
-		for _, d := range a.ins {
-			if d.tID != a.tID {
-				fmt.Fprintf(&b, "[%d, %d]", d.tID, d.aID)
-			}
-		}
+	fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
+	for _, d := range a.ins {
+		fmt.Fprintf(&b, "[%d, %d, %d]", d.tID, d.xID, d.aID)
+	}
+	for _, d := range a.outs {
+		fmt.Fprintf(&b, "{%d, %d, %d}", d.tID, d.xID, d.aID)
 	}
 	return b.String()
 }
