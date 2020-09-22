@@ -1,7 +1,6 @@
 package graph
 
 import (
-	"fmt"
 	"math/rand"
 
 	"github.com/you06/go-mikadzuki/config"
@@ -84,27 +83,7 @@ func (g *Generator) NewGraph(conn, length int) *Graph {
 	graph := NewGraph(g.kvManager, g.cfg)
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
-		var (
-			beforeTp ActionTp
-			tp       ActionTp
-		)
 		for j := 0; j < length; j++ {
-			// start from begin and stop as commit
-			if j == 0 {
-				tp = Begin
-			} else if j == length-1 {
-				if beforeTp == Commit || beforeTp == Rollback {
-					break
-				}
-				tp = Commit
-			} else {
-				tp = Begin
-				if beforeTp != Commit && beforeTp != Rollback {
-					for tp == Begin {
-						tp = g.randActionTp()
-					}
-				}
-			}
 			// TODO: random txn status
 			_ = timeline.NewTxnWithStatus(Committed)
 		}
@@ -113,8 +92,6 @@ func (g *Generator) NewGraph(conn, length int) *Graph {
 	for i := 0; i < conn; i++ {
 		graph.NewKV(i)
 	}
-
-	fmt.Println(graph.String())
 
 	return graph
 }

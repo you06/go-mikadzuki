@@ -15,8 +15,9 @@ type Action struct {
 	tp  ActionTp
 	// outs & ins are transaction dependencies,
 	// record WW dependency
-	outs []Depend
-	ins  []Depend
+	outs        []Depend
+	ins         []Depend
+	beforeWrite Depend
 	// key id, when it's -1, it means the key is not specified yet
 	kID int
 	// value id, can find out value from kv.Schema
@@ -41,6 +42,13 @@ type Depend struct {
 	xID int
 	aID int
 	tp  DependTp
+}
+
+var INVALID_DEPEND = Depend{
+	tID: -1,
+	xID: -1,
+	aID: -1,
+	tp:  WW,
 }
 
 var (
@@ -87,18 +95,19 @@ var (
 
 func NewAction(id, tID, xID int, tp ActionTp) Action {
 	return Action{
-		id:        id,
-		tID:       tID,
-		xID:       xID,
-		tp:        tp,
-		outs:      []Depend{},
-		ins:       []Depend{},
-		knowValue: false,
-		vID:       kv.INVALID_VALUE_ID,
-		SQL:       "",
-		lock:      &sync.RWMutex{},
-		ifExec:    false,
-		ifReady:   false,
+		id:          id,
+		tID:         tID,
+		xID:         xID,
+		tp:          tp,
+		outs:        []Depend{},
+		ins:         []Depend{},
+		beforeWrite: INVALID_DEPEND,
+		knowValue:   false,
+		vID:         kv.INVALID_VALUE_ID,
+		SQL:         "",
+		lock:        &sync.RWMutex{},
+		ifExec:      false,
+		ifReady:     false,
 	}
 }
 

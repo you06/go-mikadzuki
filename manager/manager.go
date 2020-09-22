@@ -68,7 +68,6 @@ func (m *Manager) Once() error {
 			res  *sql.Result
 			err  error
 		)
-		// fmt.Println(tID, aID, tp)
 		if tID >= 0 {
 			logs.LogStart(tID, aID, tp, sqlStmt)
 		}
