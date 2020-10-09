@@ -60,6 +60,7 @@ var (
 	Insert          ActionTp = "Insert"
 	Update          ActionTp = "Update"
 	Delete          ActionTp = "Delete"
+	Replace         ActionTp = "Replace"
 	actionTps                = []ActionTp{
 		Begin,
 		Commit,
@@ -69,6 +70,7 @@ var (
 		Insert,
 		Update,
 		Delete,
+		Replace,
 	}
 )
 
@@ -116,7 +118,7 @@ func (a ActionTp) IsRead() bool {
 }
 
 func (a ActionTp) IsWrite() bool {
-	return a == Insert || a == Update || a == Delete
+	return a == Insert || a == Update || a == Delete || a == Replace
 }
 
 func (a ActionTp) IsTxnBegin() bool {

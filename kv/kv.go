@@ -77,6 +77,12 @@ func (k *KV) DelValueNoTxn(s *Schema) string {
 	return s.DeleteSQL(id)
 }
 
+func (k *KV) ReplaceNoTxn(s *Schema, oldID int) string {
+	newID := s.RepValue(k.ID, oldID)
+	k.Latest = newID
+	return s.ReplaceSQL(newID)
+}
+
 func (k *KV) NewValue(v int) {
 	k.Latest = v
 	k.Values[v] = struct{}{}

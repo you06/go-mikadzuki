@@ -30,6 +30,7 @@ type Graph struct {
 	graphSum   int
 	dependMap  map[DependTp]int
 	dependSum  int
+	ticker     util.Ticker
 }
 
 type ActionLoc struct {
@@ -45,6 +46,7 @@ func NewGraph(kvManager *kv.Manager, cfg *config.Config) *Graph {
 		dependency: 0,
 		schema:     kvManager.NewSchema(),
 		order:      []ActionLoc{},
+		ticker:     util.NewTicker(time.Second),
 	}
 	g.CalcDependSum()
 	g.CalcGraphSum()
@@ -166,6 +168,36 @@ func (g *Graph) Next(t1, x1 int, pair *kv.KV, before *Action, depth int) {
 	}
 	g.AssignPair(pair, action)
 	g.ConnectTxn(t1, x1, t2, x2, dependTp)
+	if util.RdBoolRatio(0.7 * float64(g.GetTimeline(t2).allocID) / float64(depth)) {
+		g.Next(t2, x2, pair, action, depth+1)
+	}
+	if action.tp.IsWrite() && util.RdBoolRatio(2/float64(20+depth)) {
+		g.NextSplit(t2, x2, action, depth+1)
+	}
+}
+
+func (g *Graph) NextSplit(t1, x1 int, before *Action, depth int) {
+	var (
+		pair = g.schema.NewKV()
+		t2   int
+		x2   int
+		txn  *Txn
+	)
+
+	for i := 0; i < MAX_RETRY; i++ {
+		util.AssertEQ(before.tp.IsWrite(), true)
+		t2, x2, txn = g.RandTxn()
+		if !g.IfCycle(t1, x1, t2, x2, WW) {
+			break
+		}
+		if i == MAX_RETRY-1 {
+			return
+		}
+	}
+	action := txn.NewActionWithTp(Replace)
+	action.SQL = pair.ReplaceNoTxn(g.schema, before.vID)
+	action.kID = pair.ID
+	action.vID = pair.Latest
 	if util.RdBoolRatio(0.7 * float64(g.GetTimeline(t2).allocID) / float64(depth)) {
 		g.Next(t2, x2, pair, action, depth+1)
 	}
@@ -338,19 +370,14 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 
 				for _, depend := range txn.startIns {
 					before := g.GetTimeline(depend.tID).GetTxn(depend.xID)
-					// waitTime := 1
 					for (depend.tp.toFromBegin() && !before.GetStart()) ||
 						(depend.tp.toFromEnd() && !before.GetEnd()) {
 						time.Sleep(WAIT_TIME)
-						// waitTime += 1
-						// if waitTime%1500 == 0 {
-						// 	fmt.Printf("p2 (%d, %d) %s waiting for (%d, %d) done, progress: %v\n", i, txn.id, depend.tp, depend.tID, depend.xID, progress)
-						// }
 					}
 				}
 
 				txnMutex.Lock()
-				if !txn.GetStart() {
+				if txn.allocID > 0 && !txn.GetStart() {
 					if _, _, err = exec(i, progress[i]-1, Begin, "BEGIN"); err != nil {
 						errCh <- err
 						return
@@ -368,13 +395,8 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 					// WW value dependency
 					if action.tp.IsWrite() && action.beforeWrite != INVALID_DEPEND {
 						depend := action.beforeWrite
-						// waitTime := 1
 						for !g.GetTimeline(depend.tID).GetTxn(depend.xID).GetAction(depend.aID).GetExec() {
 							time.Sleep(WAIT_TIME)
-							// waitTime += 1
-							// if waitTime%1500 == 0 {
-							// 	fmt.Printf("p1 (%d, %d, %d) %s waiting for (%d, %d, %d) done, progress: %v\n", i, action.xID, action.id, depend.tp, depend.tID, depend.xID, depend.aID, progress)
-							// }
 						}
 					}
 
@@ -410,16 +432,14 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 						next := g.GetTimeline(depend.tID).GetTxn(depend.xID)
 						for !next.GetReady() {
 							time.Sleep(WAIT_TIME)
-							// waitTime += 1
-							// if waitTime%1500 == 0 {
-							// 	fmt.Printf("p3 (%d, %d) %s waiting for (%d, %d) ready, progress: %v\n", i, txn.id, depend.tp, next.tID, next.id, progress)
-							// }
 						}
 					}
 				}
 				txnMutex.Lock()
-				if _, _, err := exec(txn.tID, progress[i]-1, txn.EndTp(), txn.EndSQL()); err != nil {
-					errCh <- err
+				if txn.allocID > 0 {
+					if _, _, err := exec(txn.tID, progress[i]-1, txn.EndTp(), txn.EndSQL()); err != nil {
+						errCh <- err
+					}
 				}
 				for _, depend := range txn.endIns {
 					if depend.tp == WR {

@@ -1,6 +1,7 @@
 package graph
 
 import (
+	"fmt"
 	"math/rand"
 
 	"github.com/you06/go-mikadzuki/config"
@@ -81,17 +82,23 @@ func (g *Generator) randDependTp() DependTp {
 func (g *Generator) NewGraph(conn, length int) *Graph {
 	g.kvManager.Reset()
 	graph := NewGraph(g.kvManager, g.cfg)
+	graph.ticker.Go(func() {
+		fmt.Println("1s no result")
+	})
 	for i := 0; i < conn; i++ {
 		timeline := graph.NewTimeline()
 		for j := 0; j < length; j++ {
 			// TODO: random txn status
 			_ = timeline.NewTxnWithStatus(Committed)
+			graph.ticker.Tick()
 		}
 	}
 
 	for i := 0; i < conn; i++ {
 		graph.NewKV(i)
+		graph.ticker.Tick()
 	}
 
+	graph.ticker.Stop()
 	return graph
 }
