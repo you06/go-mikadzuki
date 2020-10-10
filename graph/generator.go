@@ -94,7 +94,7 @@ func (g *Generator) NewGraph(conn, length int) *Graph {
 		}
 	}
 
-	for i := 0; i < conn; i++ {
+	for i := 0; i < conn*200; i++ {
 		graph.NewKV(i)
 		graph.ticker.Tick()
 	}

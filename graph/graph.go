@@ -112,6 +112,7 @@ func (g *Graph) randDependTp() DependTp {
 }
 
 func (g *Graph) NewKV(t int) {
+	t = t % g.allocID
 	pair := g.schema.NewKV()
 	txn := g.GetTimeline(t).GetTxn(0)
 	action := txn.NewActionWithTp(Insert)
