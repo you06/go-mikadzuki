@@ -58,6 +58,14 @@ func (k *KV) GetValueNoTxn(s *Schema) string {
 	return s.SelectSQL(k.Latest)
 }
 
+func (k *KV) GetValueNoTxnWithID(s *Schema, vID int) string {
+	return s.SelectSQL(vID)
+}
+
+func (k *KV) GetValueNoTxnForUpdateWithID(s *Schema, vID int) string {
+	return s.SelectForUpdateSQL(vID)
+}
+
 func (k *KV) NewValueNoTxn(s *Schema) string {
 	v := s.NewValue(k.ID)
 	k.Latest = v

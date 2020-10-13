@@ -26,7 +26,7 @@ var mikadzukiCmd = &cobra.Command{
 			panic(err)
 		}
 		mgr := manager.NewManager(&cfg)
-		_, cancel := context.WithCancel(context.Background())
+		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			sc := make(chan os.Signal, 1)
 			signal.Notify(sc,
@@ -38,15 +38,9 @@ var mikadzukiCmd = &cobra.Command{
 
 			fmt.Printf("Got signal %d to exit.\n", <-sc)
 			cancel()
-			os.Exit(0)
 		}()
 		// mgr.Run(ctx)
-		fmt.Println(mgr.Once())
-
-		//
-		//generator := graph.NewGenerator(&manager, &cfg.Global, &cfg.Graph, &cfg.Depend)
-		//graph := generator.NewGraph(8, 14)
-		//fmt.Println(graph.String())
+		fmt.Println(mgr.Once(ctx))
 	},
 }
 

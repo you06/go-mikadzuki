@@ -14,6 +14,8 @@ func TestConnectTxnAndSimpleCycle(t *testing.T) {
 	var (
 		graph    *Graph
 		timeline *Timeline
+		ok       bool
+		path     [][2]int
 	)
 	graph = emptyGraph()
 	timeline = graph.NewTimeline()
@@ -72,14 +74,28 @@ func TestConnectTxnAndSimpleCycle(t *testing.T) {
 			},
 		},
 	})
-	require.True(t, graph.IfCycle(1, 0, 0, 0, WW))
-	require.True(t, graph.IfCycle(1, 0, 0, 0, WR))
-	require.False(t, graph.IfCycle(0, 0, 1, 0, WW))
-	require.False(t, graph.IfCycle(0, 0, 1, 0, RW))
+	ok, path = graph.IfCycle(1, 0, 0, 0, WW)
+	require.True(t, ok)
+	require.Equal(t, path, [][2]int{{0, 1}, {1, 0}, {1, 1}})
+	require.Equal(t, shortPath(path), [][2]int{{0, 0}, {1, 0}})
+	ok, path = graph.IfCycle(1, 0, 0, 0, WR)
+	require.True(t, ok)
+	require.Equal(t, path, [][2]int{{0, 0}, {0, 1}, {1, 0}, {1, 1}})
+	require.Equal(t, shortPath(path), [][2]int{{0, 0}, {1, 0}})
+	ok, path = graph.IfCycle(0, 0, 1, 0, WW)
+	require.False(t, ok)
+	require.Nil(t, path)
+	ok, path = graph.IfCycle(0, 0, 1, 0, RW)
+	require.False(t, ok)
+	require.Nil(t, path)
 }
 
 func TestCycle(t *testing.T) {
-	var graph *Graph
+	var (
+		graph *Graph
+		ok    bool
+		path  [][2]int
+	)
 	case1 := func() *Graph {
 		graph := emptyGraph()
 		var timeline *Timeline
@@ -92,10 +108,15 @@ func TestCycle(t *testing.T) {
 	}
 	graph = case1()
 	graph.ConnectTxn(0, 0, 1, 0, WW)
-	require.True(t, graph.IfCycle(1, 1, 0, 0, WW))
+	ok, path = graph.IfCycle(1, 1, 0, 0, WW)
+	require.True(t, ok)
+	require.Equal(t, path, [][2]int{{0, 1}, {1, 1}, {1, 2}, {1, 3}})
+	require.Equal(t, shortPath(path), [][2]int{{0, 0}, {1, 0}, {1, 1}})
 	graph = case1()
 	graph.ConnectTxn(1, 1, 0, 0, WW)
-	require.True(t, graph.IfCycle(0, 0, 1, 0, WW))
+	ok, path = graph.IfCycle(0, 0, 1, 0, WW)
+	require.True(t, ok)
+	require.Equal(t, path, [][2]int{{1, 1}, {1, 2}, {1, 3}, {0, 1}})
 
 	case2 := func() *Graph {
 		graph := emptyGraph()
@@ -112,13 +133,23 @@ func TestCycle(t *testing.T) {
 	graph = case2()
 	graph.ConnectTxn(0, 0, 2, 0, WW)
 	graph.ConnectTxn(2, 0, 1, 0, WR)
-	require.True(t, graph.IfCycle(1, 1, 0, 0, WW))
+	ok, path = graph.IfCycle(1, 1, 0, 0, WW)
+	require.True(t, ok)
+	require.Equal(t, path, [][2]int{{0, 1}, {2, 1}, {1, 0}, {1, 1}, {1, 2}, {1, 3}})
 	graph = case2()
 	graph.ConnectTxn(0, 0, 2, 0, WW)
 	graph.ConnectTxn(1, 1, 0, 0, WW)
-	require.True(t, graph.IfCycle(2, 0, 1, 0, WR))
+	ok, path = graph.IfCycle(2, 0, 1, 0, WR)
+	require.True(t, ok)
+	require.Equal(t, path, [][2]int{{1, 0}, {1, 1}, {1, 2}, {1, 3}, {0, 1}, {2, 1}})
 	graph = case2()
 	graph.ConnectTxn(1, 1, 0, 0, WW)
 	graph.ConnectTxn(2, 0, 1, 0, WR)
-	require.True(t, graph.IfCycle(0, 0, 2, 0, WW))
+	ok, path = graph.IfCycle(0, 0, 2, 0, WW)
+	require.Equal(t, path, [][2]int{{2, 1}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {0, 1}})
+	require.True(t, ok)
+}
+
+func TestCanDeadlock(t *testing.T) {
+	require.False(t, canDeadlock([][2]int{{2, 1}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {0, 1}}))
 }

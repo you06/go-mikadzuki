@@ -8,18 +8,26 @@ import (
 
 type Txn struct {
 	sync.RWMutex
-	id        int
-	tID       int
-	allocID   int
-	actions   []Action
-	status    Status
-	startOuts []Depend
-	startIns  []Depend
-	endIns    []Depend
-	endOuts   []Depend
-	ifStart   bool
-	ifEnd     bool
-	ifReady   bool
+	id         int
+	tID        int
+	allocID    int
+	actions    []Action
+	status     Status
+	startOuts  []Depend
+	startIns   []Depend
+	endIns     []Depend
+	endOuts    []Depend
+	ifStart    bool
+	ifEnd      bool
+	ifReady    bool
+	abortByErr bool
+	abortBy    struct {
+		tID int
+		xID int
+		aID int
+	}
+	lockSQL      *string
+	fetchLockSQL *string
 }
 
 func NewTxn(id, tID int, s Status) Txn {
@@ -103,6 +111,8 @@ func (t *Txn) String() string {
 		b.WriteString("Commit")
 	case Rollbacked:
 		b.WriteString("Rollback")
+	case Abort:
+		b.WriteString("Abort")
 	}
 	for _, depend := range t.endIns {
 		fmt.Fprintf(&b, "[%d, %d]", depend.tID, depend.xID)

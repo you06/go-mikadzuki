@@ -37,7 +37,7 @@ func (m *Manager) Run(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		default:
-			if err := m.Once(); err != nil {
+			if err := m.Once(ctx); err != nil {
 				fmt.Println("mikadzuki failed", err)
 				return
 			}
@@ -45,7 +45,7 @@ func (m *Manager) Run(ctx context.Context) {
 	}
 }
 
-func (m *Manager) Once() error {
+func (m *Manager) Once(ctx context.Context) error {
 	if err := m.initDB(); err != nil {
 		return err
 	}
@@ -61,66 +61,81 @@ func (m *Manager) Once() error {
 		}
 	}
 	txns := make([]db.Txn, m.cfg.Global.Thread)
+	doneCh := make(chan struct{}, 1)
+	errCh := make(chan error, 1)
 
-	if err := g.IterateGraph(func(tID, aID int, tp graph.ActionTp, sqlStmt string) (*sql.Rows, *sql.Result, error) {
-		var (
-			rows *sql.Rows
-			res  *sql.Result
-			err  error
-		)
-		if tID >= 0 {
-			logs.LogStart(tID, aID, tp, sqlStmt)
-		}
-		switch tp {
-		case graph.Begin:
-			txns[tID], err = m.db.Begin()
-		case graph.Commit:
-			if txns[tID] == nil {
-				fmt.Printf("nil txn (%d, %d)\n", tID, aID)
+	go func() {
+		if err := g.IterateGraph(func(tID int, tp graph.ActionTp, sqlStmt string) (*sql.Rows, *sql.Result, error) {
+			var (
+				rows *sql.Rows
+				res  *sql.Result
+				err  error
+				aID  int
+			)
+			if tID >= 0 {
+				aID = logs.LogStart(tID, tp, sqlStmt)
 			}
-			err = txns[tID].Commit()
-			txns[tID] = nil
-		case graph.Rollback:
-			if txns[tID] == nil {
-				fmt.Printf("nil txn (%d, %d)\n", tID, aID)
-			}
-			err = txns[tID].Rollback()
-			txns[tID] = nil
-		case graph.Select:
-			// -1 tID is for tracing bug
-			if tID == -1 {
-				rows, err = m.db.Query(sqlStmt)
-				return rows, res, err
-			} else {
+			switch tp {
+			case graph.Begin:
+				txns[tID], err = m.db.Begin()
+			case graph.Commit:
+				if txns[tID] == nil {
+					fmt.Printf("nil txn (%d, %d)\n", tID, aID)
+				}
+				err = txns[tID].Commit()
+				txns[tID] = nil
+			case graph.Rollback:
+				if txns[tID] == nil {
+					fmt.Printf("nil txn (%d, %d)\n", tID, aID)
+				}
+				err = txns[tID].Rollback()
+				txns[tID] = nil
+			case graph.Select, graph.SelectForUpdate:
+				// -1 tID is for tracing bug
+				if tID == -1 {
+					rows, err = m.db.Query(sqlStmt)
+					return rows, res, err
+				} else {
+					txn := txns[tID]
+					util.AssertNotNil(txn)
+					rows, err = txns[tID].Query(sqlStmt)
+				}
+			default:
 				txn := txns[tID]
 				util.AssertNotNil(txn)
-				rows, err = txns[tID].Query(sqlStmt)
+				res, err = txn.Exec(sqlStmt)
 			}
-		default:
-			txn := txns[tID]
-			util.AssertNotNil(txn)
-			res, err = txn.Exec(sqlStmt)
-		}
-		if err != nil {
-			logs.LogFail(tID, aID, err)
+			if tID >= 0 {
+				if err != nil {
+					logs.LogFail(tID, aID, err)
+				} else {
+					logs.LogSuccess(tID, aID)
+				}
+			}
+			return rows, res, err
+		}); err != nil {
+			if m.cfg.Global.LogPath != "" {
+				m.DumpResult(logs)
+			}
+			_ = m.closeDB()
+			errCh <- err
 		} else {
-			logs.LogSuccess(tID, aID)
+			if m.cfg.Global.LogPath != "" {
+				m.DumpResult(logs)
+			}
+			_ = m.closeDB()
+			doneCh <- struct{}{}
 		}
-		return rows, res, err
-	}); err != nil {
-		if m.cfg.Global.LogPath != "" {
-			m.DumpResult(logs)
-		}
+	}()
+	select {
+	case <-ctx.Done():
+		m.DumpResult(logs)
+		return nil
+	case err := <-errCh:
 		return err
-	} else {
-		if m.cfg.Global.LogPath != "" {
-			m.DumpResult(logs)
-		}
+	case <-doneCh:
+		return nil
 	}
-	if err := m.closeDB(); err != nil {
-		fmt.Println("close DB failed", err)
-	}
-	return nil
 }
 
 func (m *Manager) initDB() error {

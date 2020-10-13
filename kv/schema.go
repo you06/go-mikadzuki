@@ -382,6 +382,10 @@ func (s *Schema) SelectSQL(id int) string {
 	return b.String()
 }
 
+func (s *Schema) SelectForUpdateSQL(id int) string {
+	return s.SelectSQL(id) + " FOR UPDATE"
+}
+
 func (s *Schema) UpdateSQL(oldID, newID int) string {
 	if oldID == -1 {
 		return s.ReplaceSQL(newID)
