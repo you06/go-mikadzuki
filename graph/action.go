@@ -18,6 +18,7 @@ type Action struct {
 	outs        []Depend
 	ins         []Depend
 	beforeWrite Depend
+	kvNext      *Depend
 	// key id, when it's -1, it means the key is not specified yet
 	kID int
 	// value id, can find out value from kv.Schema
@@ -29,6 +30,10 @@ type Action struct {
 	lock      *sync.RWMutex
 	ifExec    bool
 	ifReady   bool
+	// anomaly fields
+	ExpectedErrorMsg string
+	abortOther       bool
+	abortSelf        bool
 }
 
 type ActionTp string
@@ -60,6 +65,7 @@ var (
 	Insert          ActionTp = "Insert"
 	Update          ActionTp = "Update"
 	Delete          ActionTp = "Delete"
+	Replace         ActionTp = "Replace"
 	actionTps                = []ActionTp{
 		Begin,
 		Commit,
@@ -69,9 +75,12 @@ var (
 		Insert,
 		Update,
 		Delete,
+		Replace,
 	}
 )
 
+// for easy usage, here we use order as depend name, eg.
+// RW means Read and Write, same as Write after Read(WaR)
 var (
 	RW        DependTp = "RW"
 	WW        DependTp = "WW"
@@ -91,6 +100,7 @@ var (
 var (
 	Committed  Status = "Committed"
 	Rollbacked Status = "Rollbacked"
+	Abort      Status = "Abortted"
 )
 
 func NewAction(id, tID, xID int, tp ActionTp) Action {
@@ -116,7 +126,7 @@ func (a ActionTp) IsRead() bool {
 }
 
 func (a ActionTp) IsWrite() bool {
-	return a == Insert || a == Update || a == Delete
+	return a == Insert || a == Update || a == Delete || a == Replace
 }
 
 func (a ActionTp) IsTxnBegin() bool {
@@ -273,10 +283,19 @@ func (a *Action) String() string {
 	b.WriteString(string(a.tp))
 	fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
 	for _, d := range a.ins {
-		fmt.Fprintf(&b, "[%d, %d, %d]", d.tID, d.xID, d.aID)
+		if a.abortOther {
+			fmt.Fprintf(&b, "[[%d, %d, %d]]", d.tID, d.xID, d.aID)
+		} else {
+
+			fmt.Fprintf(&b, "[%d, %d, %d]", d.tID, d.xID, d.aID)
+		}
 	}
 	for _, d := range a.outs {
-		fmt.Fprintf(&b, "{%d, %d, %d}", d.tID, d.xID, d.aID)
+		if a.abortSelf {
+			fmt.Fprintf(&b, "{{%d, %d, %d}}", d.tID, d.xID, d.aID)
+		} else {
+			fmt.Fprintf(&b, "{%d, %d, %d}", d.tID, d.xID, d.aID)
+		}
 	}
 	return b.String()
 }

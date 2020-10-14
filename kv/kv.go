@@ -58,6 +58,14 @@ func (k *KV) GetValueNoTxn(s *Schema) string {
 	return s.SelectSQL(k.Latest)
 }
 
+func (k *KV) GetValueNoTxnWithID(s *Schema, vID int) string {
+	return s.SelectSQL(vID)
+}
+
+func (k *KV) GetValueNoTxnForUpdateWithID(s *Schema, vID int) string {
+	return s.SelectForUpdateSQL(vID)
+}
+
 func (k *KV) NewValueNoTxn(s *Schema) string {
 	v := s.NewValue(k.ID)
 	k.Latest = v
@@ -75,6 +83,12 @@ func (k *KV) DelValueNoTxn(s *Schema) string {
 	id := k.Latest
 	k.Latest = NULL_VALUE_ID
 	return s.DeleteSQL(id)
+}
+
+func (k *KV) ReplaceNoTxn(s *Schema, oldID int) string {
+	newID := s.RepValue(k.ID, oldID)
+	k.Latest = newID
+	return s.ReplaceSQL(newID)
 }
 
 func (k *KV) NewValue(v int) {

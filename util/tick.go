@@ -27,9 +27,12 @@ func (t *Ticker) Go(f func()) {
 				return
 			}
 			if time.Since(t.last) > t.duration {
+				t.RUnlock()
+				t.Tick()
 				f()
+			} else {
+				t.RUnlock()
 			}
-			t.RUnlock()
 		}
 	}()
 }
@@ -38,7 +41,6 @@ func (t *Ticker) Tick() {
 	t.Lock()
 	defer t.Unlock()
 	t.last = time.Now()
-	t.end = false
 }
 
 func (t *Ticker) Stop() {

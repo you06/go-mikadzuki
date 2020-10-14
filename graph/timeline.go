@@ -22,7 +22,7 @@ func (t *Timeline) String() string {
 	var b strings.Builder
 	for i, t := range t.txns {
 		if i != 0 {
-			b.WriteString(" -> ")
+			b.WriteString("\n")
 		}
 		b.WriteString(t.String())
 	}
