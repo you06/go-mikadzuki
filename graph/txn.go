@@ -8,20 +8,25 @@ import (
 
 type Txn struct {
 	sync.RWMutex
-	id         int
-	tID        int
-	allocID    int
-	actions    []Action
-	status     Status
-	startOuts  []Depend
-	startIns   []Depend
-	endIns     []Depend
-	endOuts    []Depend
-	ifStart    bool
-	ifEnd      bool
-	ifReady    bool
-	abortByErr bool
-	abortBy    struct {
+	id          int
+	tID         int
+	allocID     int
+	actions     []Action
+	status      Status
+	startOuts   []Depend
+	startIns    []Depend
+	endIns      []Depend
+	endOuts     []Depend
+	ifStart     bool
+	ifEnd       bool
+	ifReady     bool
+	abortOther  bool
+	abortByErr  bool
+	abortBefore struct {
+		tID int
+		xID int
+	}
+	abortBy struct {
 		tID int
 		xID int
 		aID int

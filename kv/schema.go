@@ -132,6 +132,13 @@ func (s *Schema) NewKV() *KV {
 	return &s.KVs[id]
 }
 
+func (s *Schema) GetKV(id int) *KV {
+	if id >= s.AllocKID {
+		return nil
+	}
+	return &s.KVs[id]
+}
+
 // NewValue create value for a given key (Insert operation)
 func (s *Schema) NewValue(kID int) int {
 	id := s.AllocVID
@@ -214,9 +221,9 @@ func (s *Schema) AssignPrimaryKey(oldValue, newValue *[]interface{}) {
 func (s *Schema) AssignPrimaryKeyPart(oldValue, newValue *[]interface{}) {
 	l := len(s.Primary)
 	for i := 0; i < l; i++ {
-		if util.RdBoolRatio(float64(i+1) / float64(l)) {
-			continue
-		}
+		// if util.RdBoolRatio(float64(i+1) / float64(l)) {
+		// 	continue
+		// }
 		pos := s.Primary[i]
 		(*newValue)[pos] = (*oldValue)[pos]
 	}
@@ -325,6 +332,10 @@ func (s *Schema) ReplaceValue(newID, oldID int) {
 
 	if oldID != NULL_VALUE_ID {
 		oldValue = s.Data[oldID]
+		s.MakePrimaryKey(oldValue, &primaryKey)
+		s.MakeUniqueKey(oldValue, &uniqueKeys)
+		s.DelPrimaryKey(primaryKey)
+		s.DelUniqueKeys(uniqueKeys)
 	}
 	for {
 		value = s.MakeValue()

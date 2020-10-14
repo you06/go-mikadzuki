@@ -40,7 +40,9 @@ var mikadzukiCmd = &cobra.Command{
 			cancel()
 		}()
 		// mgr.Run(ctx)
-		fmt.Println(mgr.Once(ctx))
+		if err := mgr.Once(ctx); err != nil {
+			fmt.Println(err)
+		}
 	},
 }
 

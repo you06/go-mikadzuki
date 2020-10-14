@@ -177,6 +177,9 @@ func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
 		}
 	}
 	action := txn.NewActionWithTp(tp)
+	if tp.IsRead() && action.vID == -1 {
+		ifCycle = false
+	}
 	action.ins = append(action.ins, Depend{
 		tID: t1,
 		xID: x1,
@@ -189,7 +192,9 @@ func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
 		aID: action.id,
 		tp:  dependTp,
 	})
-	if before.tp.IsRead() || g.GetTimeline(before.tID).GetTxn(before.xID).status != Committed {
+	if before.tp.IsRead() ||
+		g.GetTimeline(before.tID).GetTxn(before.xID).status != Committed ||
+		before.abortOther {
 		action.beforeWrite = before.beforeWrite
 	} else {
 		action.beforeWrite = Depend{
@@ -210,9 +215,9 @@ func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
 		g.Anomaly(before, action, short)
 	} else {
 		g.ConnectTxn(t1, x1, t2, x2, dependTp)
+		g.AssignPair(pair, action)
 	}
 
-	g.AssignPair(pair, action)
 	if util.RdBoolRatio(0.7 * float64(g.GetTimeline(t2).allocID) / float64(depth)) {
 		g.Next(t2, x2, x2+util.RdRange(0, 2), pair, action, depth+1)
 	}
@@ -259,6 +264,8 @@ func (g *Graph) Anomaly(before, action *Action, short [][2]int) {
 	lockKV := g.schema.NewKV()
 	beforeSQL := lockKV.NewValueNoTxn(g.schema)
 	afterSQL := lockKV.PutValueNoTxn(g.schema)
+	actionTxn := g.GetTimeline(action.tID).GetTxn(action.xID)
+	actionTxn.abortOther = true
 	beforeTxn := g.GetTimeline(before.tID).GetTxn(before.xID)
 	beforeTxn.lockSQL = &beforeSQL
 	beforeTxn.fetchLockSQL = &afterSQL
@@ -268,18 +275,37 @@ func (g *Graph) Anomaly(before, action *Action, short [][2]int) {
 		xID int
 		aID int
 	}{tID: action.tID, xID: action.xID, aID: action.id}
+	beforeTxn.abortBefore = struct {
+		tID int
+		xID int
+	}{tID: short[len(short)-2][0], xID: short[len(short)-2][1]}
+	// OUTER:
+	// for i := 0; i < beforeTxn.allocID; i++ {
+	// 	beforeAction := beforeTxn.GetAction(i)
+	// 	if beforeAction.kID == before.kID && beforeAction.kID != -1 {
+	// 		beforeAction.abortSelf = true
+	// 		beforeAction.ExpectedErrorMsg = "Deadlock"
+	// 		before = beforeAction
+	// 		break
+	// 	}
+	// 	for _, depend := range beforeAction.outs {
+	// 		for j := 0; j < len(short)-1; j++ {
+	// 			target := short[j]
+	// 			if depend.tID == target[0] && depend.xID == target[1] {
+	// 				beforeAction.abortSelf = true
+	// 				beforeAction.ExpectedErrorMsg = "Deadlock"
+	// 				before = beforeAction
+	// 				break OUTER
+	// 			}
+	// 		}
+	// 	}
+	// 	if i == beforeTxn.allocID-1 {
+	// 		fmt.Println("!!!!!!!!!!")
+	// 	}
+	// }
+
+	before.abortSelf = true
 	before.ExpectedErrorMsg = "Deadlock"
-	target := short[len(short)-2]
-OUTER:
-	for i := 0; i < beforeTxn.allocID; i++ {
-		beforeAction := beforeTxn.GetAction(i)
-		for _, depend := range beforeAction.ins {
-			if depend.tID == target[0] && depend.xID == target[1] {
-				beforeAction.abortSelf = true
-				break OUTER
-			}
-		}
-	}
 	action.abortOther = true
 	g.Abort(before.tID, before.xID)
 	// change `SELECT` to `SELECT FOR UPDATE`
@@ -291,25 +317,48 @@ OUTER:
 		txn := g.GetTimeline(short[index][0]).GetTxn(short[index][1])
 		for j := 0; j < txn.allocID; j++ {
 			action := txn.GetAction(j)
+			addLock := false
 			for _, inDepend := range action.ins {
 				if inDepend.tID == short[index-1][0] && inDepend.xID == short[index-1][1] {
 					if inDepend.tp == WR {
-						if action.tp == Select {
-							action.tp = SelectForUpdate
-							action.SQL = action.SQL + " FOR UPDATE"
+						if !addLock {
+							if action.tp == Select {
+								action.tp = SelectForUpdate
+								action.SQL = g.schema.GetKV(action.kID).GetValueNoTxnForUpdateWithID(g.schema, action.vID)
+							}
+							addLock = true
+						} else {
+							action.beforeWrite = g.GetTimeline(action.beforeWrite.tID).
+								GetTxn(action.beforeWrite.xID).
+								GetAction(action.beforeWrite.aID).beforeWrite
+							if action.beforeWrite != INVALID_DEPEND {
+								before := g.GetTimeline(action.beforeWrite.tID).
+									GetTxn(action.beforeWrite.xID).
+									GetAction(action.beforeWrite.aID)
+								action.vID = before.vID
+								g.ConnectTxn(before.tID, before.xID, txn.tID, txn.id, WR)
+							} else {
+								action.vID = kv.NULL_VALUE_ID
+							}
 						}
-						break
 					}
 					if i == 0 && inDepend.tp == RW {
 						before := g.GetTimeline(inDepend.tID).GetTxn(inDepend.xID).GetAction(inDepend.aID)
 						if before.tp == Select {
 							before.tp = SelectForUpdate
-							before.SQL = before.SQL + " FOR UPDATE"
+							before.SQL = g.schema.GetKV(before.kID).GetValueNoTxnForUpdateWithID(g.schema, before.vID)
 						}
 						break
 					}
 				}
 			}
+			newStartIns := []Depend{}
+			for _, inDepend := range txn.startIns {
+				if !(inDepend.tID == short[index-1][0] && inDepend.xID == short[index-1][1]) {
+					newStartIns = append(newStartIns, inDepend)
+				}
+			}
+			txn.startIns = newStartIns
 		}
 	}
 	if action.tp == Select {
@@ -357,7 +406,7 @@ func (g *Graph) Abort(tID, xID int) {
 func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
 	switch action.tp {
 	case Select, SelectForUpdate:
-		beforeVID := -1
+		beforeVID := kv.NULL_VALUE_ID
 		if action.beforeWrite != INVALID_DEPEND {
 			beforeVID = g.GetTimeline(action.beforeWrite.tID).
 				GetTxn(action.beforeWrite.xID).
@@ -370,7 +419,12 @@ func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
 			action.SQL = pair.GetValueNoTxnForUpdateWithID(g.schema, beforeVID)
 		}
 	case Insert:
-		action.SQL = pair.NewValueNoTxn(g.schema)
+		if pair.Latest == kv.NULL_VALUE_ID {
+			action.SQL = pair.NewValueNoTxn(g.schema)
+		} else {
+			action.tp = Replace
+			action.SQL = pair.ReplaceNoTxn(g.schema, pair.Latest)
+		}
 	case Update:
 		action.SQL = pair.PutValueNoTxn(g.schema)
 	case Delete:
@@ -555,7 +609,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 
 				for _, depend := range txn.startIns {
 					// in anomaly, WR dependency does need to block txn start
-					if txn.abortByErr && depend.tID == txn.abortBy.tID && depend.xID == txn.abortBy.xID {
+					if txn.abortByErr && depend.tID == txn.abortBefore.tID && depend.xID == txn.abortBefore.xID {
 						continue
 					}
 					before := g.GetTimeline(depend.tID).GetTxn(depend.xID)
@@ -570,7 +624,9 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 					}
 				}
 
+				fmt.Printf("txn %d lock\n", i)
 				txnMutex.Lock()
+				fmt.Printf(", txn %d locked\n", i)
 				if txn.allocID > 0 && !txn.GetStart() {
 					if _, _, err = exec(i, Begin, "BEGIN"); err != nil {
 						errCh <- err
@@ -580,7 +636,15 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 				}
 				txnMutex.Unlock()
 
-				if txn.abortByErr {
+				// if a txn abort another, the lock dependency should execute be generated after that
+				abortOtherDone := true
+				for _, action := range txn.actions {
+					if action.abortOther {
+						abortOtherDone = false
+						break
+					}
+				}
+				if txn.abortByErr && abortOtherDone {
 					abortBy := g.GetTimeline(txn.abortBy.tID).GetTxn(txn.abortBy.xID).GetAction(txn.abortBy.aID)
 					for !abortBy.GetReady() {
 						time.Sleep(WAIT_TIME)
@@ -591,15 +655,16 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 						return
 					}
 					go func() {
-						fmt.Println("err exec p2", action.tID, action.xID, action.id)
+						fmt.Println("err exec p2", txn.tID, txn.id, abortBy.tID, abortBy.xID, abortBy.id)
 						_, _, err = exec(abortBy.tID, Update, *txn.fetchLockSQL)
 						if err != nil {
 							errCh <- err
 							return
 						}
-						fmt.Println("err exec p3", action.tID, action.xID, action.id)
+						fmt.Println("err exec p3", txn.tID, txn.id, abortBy.tID, abortBy.xID, abortBy.id)
 						abortBy.SetExec(true)
 					}()
+					time.Sleep(WAIT_TIME * 20)
 				}
 				for k := 0; k < txn.allocID; k++ {
 					progress[i]++
@@ -608,11 +673,11 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 					action = txn.GetAction(k)
 					control.RUnlock()
 					// WW value dependency
-					if action.tp.IsWrite() && action.beforeWrite != INVALID_DEPEND /*&& action.fetchLockSQL == nil*/ {
+					if action.tp.IsWrite() && action.beforeWrite != INVALID_DEPEND && txn.abortByErr {
 						depend := action.beforeWrite
 						before := g.GetTimeline(depend.tID).GetTxn(depend.xID).GetAction(depend.aID)
 						t := 1
-						for !before.GetExec() {
+						for !before.GetExec() && !action.abortSelf {
 							t += 1
 							if t%1000 == 0 {
 								fmt.Println("wait for ww", action.tID, action.xID, action.id, action.abortSelf, before.tID, before.xID, before.id, before.abortSelf)
@@ -634,49 +699,38 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 						if next := txn.GetAction(k + 1); next != nil {
 							next.SetReady(true)
 						}
-						continue
-					}
 
-					// // deadlock expected
-					// var errNext *Action
-					// if action.ExpectedError {
-					// 	util.AssertNotNil(action.lockSQL)
-					// 	for _, depend := range action.outs {
-					// 		n := g.GetTimeline(depend.tID).GetTxn(depend.xID).GetAction(depend.aID)
-					// 		if n.fetchLockSQL != nil {
-					// 			errNext = n
-					// 			break
-					// 		}
-					// 	}
-					// 	util.AssertNotNil(errNext)
-					// 	t := 1
-					// 	for !errNext.GetReady() {
-					// 		t += 1
-					// 		if t%1000 == 0 {
-					// 			fmt.Println("wait for errNext ready", txn.tID, txn.id)
-					// 		}
-					// 		time.Sleep(WAIT_TIME)
-					// 	}
-					// 	_, _, err = exec(i, Insert, *action.lockSQL)
-					// 	if err != nil {
-					// 		errCh <- err
-					// 		return
-					// 	}
-					// 	go func() {
-					// 		fmt.Println("err exec p2", action.tID, action.xID, action.id)
-					// 		_, _, err = exec(errNext.tID, Update, *errNext.fetchLockSQL)
-					// 		if err != nil {
-					// 			errCh <- err
-					// 			return
-					// 		}
-					// 		fmt.Println("err exec p3", action.tID, action.xID, action.id)
-					// 	}()
-					// }
-					if action.abortSelf {
-						abortBy := g.GetTimeline(txn.abortBy.tID).GetTxn(txn.abortBy.xID).GetAction(txn.abortBy.aID)
-						for !abortBy.GetExec() {
-							time.Sleep(WAIT_TIME)
+						// if a txn abort another, the lock dependency should execute be generated after that
+						abortOtherDone = true
+						for _, action := range txn.actions {
+							if action.abortOther {
+								abortOtherDone = false
+								break
+							}
 						}
+						if abortOtherDone {
+							abortBy := g.GetTimeline(txn.abortBy.tID).GetTxn(txn.abortBy.xID).GetAction(txn.abortBy.aID)
+							for !abortBy.GetReady() {
+								time.Sleep(WAIT_TIME)
+							}
+							_, _, err = exec(i, Insert, *txn.lockSQL)
+							if err != nil {
+								errCh <- err
+								return
+							}
+							go func() {
+								fmt.Println("err exec p2", txn.tID, txn.id, abortBy.tID, abortBy.xID, abortBy.id)
+								_, _, err = exec(abortBy.tID, Update, *txn.fetchLockSQL)
+								if err != nil {
+									errCh <- err
+									return
+								}
+								fmt.Println("err exec p3", txn.tID, txn.id, abortBy.tID, abortBy.xID, abortBy.id)
+								abortBy.SetExec(true)
+							}()
+							time.Sleep(WAIT_TIME * 20)
+						}
+						continue
 					}
 
 					execDone := make(chan struct{}, 1)
@@ -687,6 +741,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 							case <-execDone:
 								return
 							default:
+								action.SetExec(true)
 								fmt.Println("hang in exec", action.tID, action.xID, action.id)
 							}
 						}
@@ -730,6 +785,9 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 							control.Unlock()
 						}
 					}
+					if rows != nil {
+						rows.Close()
+					}
 					action.SetExec(true)
 					if next := txn.GetAction(k + 1); next != nil {
 						next.SetReady(true)
@@ -754,8 +812,10 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 				}
 				txnMutex.Lock()
 				if txn.allocID > 0 {
-					if _, _, err := exec(txn.tID, txn.EndTp(), txn.EndSQL()); err != nil {
-						errCh <- err
+					if txn.status != Abort {
+						if _, _, err := exec(txn.tID, txn.EndTp(), txn.EndSQL()); err != nil {
+							errCh <- err
+						}
 					}
 				}
 				for _, depend := range txn.endIns {

@@ -148,6 +148,21 @@ func TestCycle(t *testing.T) {
 	ok, path = graph.IfCycle(0, 0, 2, 0, WW)
 	require.Equal(t, path, [][2]int{{2, 1}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {0, 1}})
 	require.True(t, ok)
+
+	case3 := func() *Graph {
+		graph := emptyGraph()
+		var timeline *Timeline
+		timeline = graph.NewTimeline()
+		_ = timeline.NewTxnWithStatus(Committed)
+		timeline = graph.NewTimeline()
+		_ = timeline.NewTxnWithStatus(Committed)
+		return graph
+	}
+	graph = case3()
+	graph.ConnectTxn(0, 0, 1, 0, WW)
+	ok, path = graph.IfCycle(1, 0, 0, 0, WW)
+	require.True(t, ok)
+	require.Equal(t, path, [][2]int{{0, 1}, {1, 1}})
 }
 
 func TestCanDeadlock(t *testing.T) {

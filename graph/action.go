@@ -79,6 +79,8 @@ var (
 	}
 )
 
+// for easy usage, here we use order as depend name, eg.
+// RW means Read and Write, same as Write after Read(WaR)
 var (
 	RW        DependTp = "RW"
 	WW        DependTp = "WW"

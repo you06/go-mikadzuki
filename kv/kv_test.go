@@ -42,10 +42,14 @@ var (
 		UniqueSet: []map[string]struct{}{{
 			"kaeru-2020-08-31": {},
 		}},
-		AllocKID: 0,
-		AllocVID: 0,
+		AllocKID: 1,
+		AllocVID: 2,
 		VID2KID:  map[int]int{},
-		KVs:      []KV{},
+		KVs: []KV{
+			{
+				ID: 0,
+			},
+		},
 		Data: [][]interface{}{
 			{17, "kaeru", "2020-08-31"},
 			{18, "kaeru", "1919-08-10"},
@@ -107,4 +111,10 @@ func TestDeleteSQL(t *testing.T) {
 func TestInsertSQL(t *testing.T) {
 	insertSQL := schema.InsertSQL(1)
 	require.Equal(t, insertSQL, `INSERT INTO t1 VALUES(18, "kaeru", "1919-08-10")`)
+}
+
+func TestReplace(t *testing.T) {
+	newID := schema.RepValue(0, 0)
+	require.Equal(t, schema.Data[newID][0], 17)
+	require.Equal(t, schema.Data[newID][1], "kaeru")
 }
