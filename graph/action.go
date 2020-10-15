@@ -34,6 +34,8 @@ type Action struct {
 	ExpectedErrorMsg string
 	abortOther       bool
 	abortSelf        bool
+	mayAbortSelf     bool
+	abortBlock       *Depend
 }
 
 type ActionTp string
@@ -105,19 +107,22 @@ var (
 
 func NewAction(id, tID, xID int, tp ActionTp) Action {
 	return Action{
-		id:          id,
-		tID:         tID,
-		xID:         xID,
-		tp:          tp,
-		outs:        []Depend{},
-		ins:         []Depend{},
-		beforeWrite: INVALID_DEPEND,
-		knowValue:   false,
-		vID:         kv.INVALID_VALUE_ID,
-		SQL:         "",
-		lock:        &sync.RWMutex{},
-		ifExec:      false,
-		ifReady:     false,
+		id:           id,
+		tID:          tID,
+		xID:          xID,
+		tp:           tp,
+		outs:         []Depend{},
+		ins:          []Depend{},
+		beforeWrite:  INVALID_DEPEND,
+		knowValue:    false,
+		vID:          kv.INVALID_VALUE_ID,
+		SQL:          "",
+		lock:         &sync.RWMutex{},
+		ifExec:       false,
+		ifReady:      false,
+		abortOther:   false,
+		abortSelf:    false,
+		mayAbortSelf: false,
 	}
 }
 
@@ -127,6 +132,10 @@ func (a ActionTp) IsRead() bool {
 
 func (a ActionTp) IsWrite() bool {
 	return a == Insert || a == Update || a == Delete || a == Replace
+}
+
+func (a ActionTp) IsLock() bool {
+	return a.IsWrite() || a == SelectForUpdate
 }
 
 func (a ActionTp) IsTxnBegin() bool {
@@ -282,16 +291,15 @@ func (a *Action) String() string {
 	var b strings.Builder
 	b.WriteString(string(a.tp))
 	fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
-	for _, d := range a.ins {
-		if a.abortOther {
-			fmt.Fprintf(&b, "[[%d, %d, %d]]", d.tID, d.xID, d.aID)
-		} else {
-
+	if a.abortSelf {
+		fmt.Fprintf(&b, "[[%d, %d, %d]]", a.abortBlock.tID, a.abortBlock.xID, a.abortBlock.aID)
+	} else {
+		for _, d := range a.ins {
 			fmt.Fprintf(&b, "[%d, %d, %d]", d.tID, d.xID, d.aID)
 		}
 	}
 	for _, d := range a.outs {
-		if a.abortSelf {
+		if a.abortOther {
 			fmt.Fprintf(&b, "{{%d, %d, %d}}", d.tID, d.xID, d.aID)
 		} else {
 			fmt.Fprintf(&b, "{%d, %d, %d}", d.tID, d.xID, d.aID)

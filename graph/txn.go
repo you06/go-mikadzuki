@@ -8,30 +8,26 @@ import (
 
 type Txn struct {
 	sync.RWMutex
-	id          int
-	tID         int
-	allocID     int
-	actions     []Action
-	status      Status
-	startOuts   []Depend
-	startIns    []Depend
-	endIns      []Depend
-	endOuts     []Depend
-	ifStart     bool
-	ifEnd       bool
-	ifReady     bool
-	abortOther  bool
-	abortByErr  bool
-	abortBefore struct {
-		tID int
-		xID int
-	}
-	abortBy struct {
+	id         int
+	tID        int
+	allocID    int
+	actions    []Action
+	status     Status
+	startOuts  []Depend
+	startIns   []Depend
+	endIns     []Depend
+	endOuts    []Depend
+	ifStart    bool
+	ifEnd      bool
+	ifReady    bool
+	abortByErr bool
+	abortBy    struct {
 		tID int
 		xID int
 		aID int
 	}
-	lockSQL      *string
+	cycle        *Cycle
+	lockSQLs     []string
 	fetchLockSQL *string
 }
 
@@ -46,6 +42,7 @@ func NewTxn(id, tID int, s Status) Txn {
 		startIns:  []Depend{},
 		endIns:    []Depend{},
 		endOuts:   []Depend{},
+		lockSQLs:  []string{},
 	}
 }
 
@@ -145,4 +142,22 @@ func (t *Txn) EndSQL() string {
 	default:
 		panic(fmt.Sprintf("unsupport txn status %s", t.status))
 	}
+}
+
+type Cycle struct {
+	txns []struct {
+		tID int
+		xID int
+		aID int
+	}
+}
+
+func (c *Cycle) IfAbort(g *Graph) bool {
+	for _, t := range c.txns {
+		txn := g.GetTimeline(t.tID).GetTxn(t.xID)
+		if txn.abortByErr {
+			return true
+		}
+	}
+	return false
 }

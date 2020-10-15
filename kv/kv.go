@@ -8,9 +8,10 @@ const (
 )
 
 type KV struct {
-	ID     int
-	Values map[int]struct{}
-	Latest int
+	ID        int
+	Values    map[int]struct{}
+	Latest    int
+	DeleteVal int
 }
 
 // Txn only record uncommitted values
@@ -39,9 +40,10 @@ type KVAction struct {
 
 func NewKV(id int) KV {
 	return KV{
-		ID:     id,
-		Values: make(map[int]struct{}),
-		Latest: NULL_VALUE_ID,
+		ID:        id,
+		Values:    make(map[int]struct{}),
+		Latest:    NULL_VALUE_ID,
+		DeleteVal: INVALID_VALUE_ID,
 	}
 }
 
@@ -67,8 +69,14 @@ func (k *KV) GetValueNoTxnForUpdateWithID(s *Schema, vID int) string {
 }
 
 func (k *KV) NewValueNoTxn(s *Schema) string {
-	v := s.NewValue(k.ID)
+	var v int
+	if k.Latest == NULL_VALUE_ID && k.DeleteVal != INVALID_VALUE_ID {
+		v = s.PutValue(k.ID, k.DeleteVal)
+	} else {
+		v = s.NewValue(k.ID)
+	}
 	k.Latest = v
+	k.DeleteVal = INVALID_VALUE_ID
 	return s.InsertSQL(v)
 }
 
@@ -76,11 +84,17 @@ func (k *KV) PutValueNoTxn(s *Schema) string {
 	oldID := k.Latest
 	newID := s.PutValue(k.ID, oldID)
 	k.Latest = newID
+	k.DeleteVal = INVALID_VALUE_ID
 	return s.UpdateSQL(oldID, newID)
 }
 
 func (k *KV) DelValueNoTxn(s *Schema) string {
 	id := k.Latest
+	if id == NULL_VALUE_ID && k.DeleteVal != INVALID_VALUE_ID {
+		id = k.DeleteVal
+	} else {
+		k.DeleteVal = id
+	}
 	k.Latest = NULL_VALUE_ID
 	return s.DeleteSQL(id)
 }
@@ -88,6 +102,7 @@ func (k *KV) DelValueNoTxn(s *Schema) string {
 func (k *KV) ReplaceNoTxn(s *Schema, oldID int) string {
 	newID := s.RepValue(k.ID, oldID)
 	k.Latest = newID
+	k.DeleteVal = INVALID_VALUE_ID
 	return s.ReplaceSQL(newID)
 }
 
