@@ -10,6 +10,15 @@ func emptyGraph() *Graph {
 	return &Graph{}
 }
 
+func newDepend(tID, xID, aID int, tp DependTp) Depend {
+	return Depend{
+		tID: tID,
+		xID: xID,
+		aID: aID,
+		tp:  tp,
+	}
+}
+
 func TestConnectTxnAndSimpleCycle(t *testing.T) {
 	var (
 		graph    *Graph
@@ -167,4 +176,60 @@ func TestCycle(t *testing.T) {
 
 func TestCanDeadlock(t *testing.T) {
 	require.False(t, canDeadlock([][2]int{{2, 1}, {1, 0}, {1, 1}, {1, 2}, {1, 3}, {0, 1}}))
+}
+
+func TestMoveBefore(t *testing.T) {
+	case1 := func() *Graph {
+		graph := emptyGraph()
+		var (
+			timeline *Timeline
+			txn      *Txn
+		)
+		timeline = graph.NewTimeline()
+		txn = timeline.NewTxnWithStatus(Committed)
+		txn.NewActionWithTp(Insert)
+		timeline = graph.NewTimeline()
+		txn = timeline.NewTxnWithStatus(Committed)
+		txn.NewActionWithTp(Insert)
+		txn.NewActionWithTp(Insert)
+		txn.NewActionWithTp(Insert)
+		txn.NewActionWithTp(Insert)
+		timeline = graph.NewTimeline()
+		txn = timeline.NewTxnWithStatus(Committed)
+		txn.NewActionWithTp(Insert)
+		txn.NewActionWithTp(Insert)
+		txn.NewActionWithTp(Insert)
+		graph.ConnectAction(0, 0, 0, 1, 0, 0, WW)
+		graph.ConnectAction(0, 0, 0, 1, 0, 1, WW)
+		graph.ConnectAction(0, 0, 0, 1, 0, 2, WW)
+		graph.ConnectAction(1, 0, 0, 2, 0, 0, WW)
+		graph.ConnectAction(1, 0, 1, 2, 0, 1, WW)
+		graph.ConnectAction(1, 0, 2, 2, 0, 2, WW)
+		return graph
+	}
+	graph := case1()
+	graph.MoveBefore(1, 0, 0, 2)
+	require.Equal(t, graph.GetAction(0, 0, 0).outs, []Depend{
+		newDepend(1, 0, 1, WW),
+		newDepend(1, 0, 2, WW),
+		newDepend(1, 0, 0, WW),
+	})
+	require.Equal(t, graph.GetAction(1, 0, 0).outs, []Depend{
+		newDepend(2, 0, 2, WW),
+	})
+	require.Equal(t, graph.GetAction(1, 0, 1).outs, []Depend{
+		newDepend(2, 0, 0, WW),
+	})
+	require.Equal(t, graph.GetAction(1, 0, 2).outs, []Depend{
+		newDepend(2, 0, 1, WW),
+	})
+	require.Equal(t, graph.GetAction(2, 0, 0).ins, []Depend{
+		newDepend(1, 0, 1, WW),
+	})
+	require.Equal(t, graph.GetAction(2, 0, 1).ins, []Depend{
+		newDepend(1, 0, 2, WW),
+	})
+	require.Equal(t, graph.GetAction(2, 0, 2).ins, []Depend{
+		newDepend(1, 0, 0, WW),
+	})
 }

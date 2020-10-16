@@ -371,6 +371,7 @@ func (s *Schema) DeleteValue(vID int) {
 }
 
 func (s *Schema) SelectSQL(id int) string {
+	util.AssertNE(id, INVALID_VALUE_ID)
 	if id == -1 {
 		return fmt.Sprintf("SELECT * FROM %s WHERE 0", s.TableName())
 	}

@@ -43,3 +43,11 @@ func (t *Timeline) GetTxn(n int) *Txn {
 	}
 	return nil
 }
+
+func (t *Timeline) GetAction(xID, aID int) *Action {
+	txn := t.GetTxn(xID)
+	if txn == nil {
+		return nil
+	}
+	return txn.GetAction(aID)
+}

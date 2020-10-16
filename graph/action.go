@@ -36,6 +36,7 @@ type Action struct {
 	abortSelf        bool
 	mayAbortSelf     bool
 	abortBlock       *Depend
+	cycle            *Cycle
 }
 
 type ActionTp string
@@ -88,7 +89,6 @@ var (
 	WW        DependTp = "WW"
 	WR        DependTp = "WR"
 	RR        DependTp = "RR"
-	WRCommit  DependTp = "WRCommit"
 	Realtime  DependTp = "Realtime"
 	NotInit   DependTp = "NotInit"
 	dependTps          = []DependTp{
@@ -289,6 +289,9 @@ func (a *Action) GetReady() bool {
 
 func (a *Action) String() string {
 	var b strings.Builder
+	if a.mayAbortSelf {
+		b.WriteByte('*')
+	}
 	b.WriteString(string(a.tp))
 	fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
 	if a.abortSelf {

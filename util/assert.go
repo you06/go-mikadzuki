@@ -27,3 +27,12 @@ func AssertNotNil(i interface{}) {
 		panic(fmt.Sprintf("%v is nil", i))
 	}
 }
+
+func AssertIN(left interface{}, rights []interface{}) {
+	for _, right := range rights {
+		if left == right {
+			return
+		}
+	}
+	panic(fmt.Sprintf("%v not in right %v", left, rights))
+}

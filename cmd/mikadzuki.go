@@ -14,6 +14,7 @@ import (
 
 var (
 	cfgFile string
+	dryrun  bool
 )
 
 var mikadzukiCmd = &cobra.Command{
@@ -25,7 +26,10 @@ var mikadzukiCmd = &cobra.Command{
 		if err := cfg.Load(cfgFile); err != nil {
 			panic(err)
 		}
-		mgr := manager.NewManager(&cfg)
+		mgr := manager.NewManager(manager.Option{
+			Cfg:    &cfg,
+			Dryrun: dryrun,
+		})
 		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			sc := make(chan os.Signal, 1)
@@ -48,4 +52,5 @@ var mikadzukiCmd = &cobra.Command{
 
 func init() {
 	mikadzukiCmd.Flags().StringVar(&cfgFile, "config", "config.toml", "config file")
+	mikadzukiCmd.Flags().BoolVar(&dryrun, "dryrun", false, "dry run mode will generate graph only")
 }

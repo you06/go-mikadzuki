@@ -17,16 +17,23 @@ import (
 )
 
 type Manager struct {
+	opt      Option
 	cfg      *config.Config
 	graphMgr graph.Generator
 	db       db.DB
 }
 
-func NewManager(cfg *config.Config) *Manager {
-	kvManager := kv.NewManager(&cfg.Global)
+type Option struct {
+	Cfg    *config.Config
+	Dryrun bool
+}
+
+func NewManager(opt Option) *Manager {
+	kvManager := kv.NewManager(&opt.Cfg.Global)
 	m := Manager{
-		cfg:      cfg,
-		graphMgr: graph.NewGenerator(&kvManager, cfg),
+		opt:      opt,
+		cfg:      opt.Cfg,
+		graphMgr: graph.NewGenerator(&kvManager, opt.Cfg),
 	}
 	return &m
 }
@@ -46,20 +53,31 @@ func (m *Manager) Run(ctx context.Context) {
 }
 
 func (m *Manager) Once(ctx context.Context) error {
-	if err := m.initDB(); err != nil {
-		return err
+	if !m.opt.Dryrun {
+		if err := m.initDB(); err != nil {
+			return err
+		}
 	}
 	g := m.graphMgr.NewGraph(m.cfg.Global.Thread, m.cfg.Global.Action)
-	logs := NewExecutionLog(m.cfg.Global.Thread, g.MaxAction())
 	if m.cfg.Global.LogPath != "" {
 		m.DumpGraph(g)
 	}
+
+	if m.opt.Dryrun {
+		for _, stmt := range g.GetSchemas() {
+			fmt.Println(stmt)
+		}
+		return nil
+	}
+
 	for _, stmt := range g.GetSchemas() {
 		fmt.Println(stmt)
 		if _, err := m.db.Exec(stmt); err != nil {
 			return err
 		}
 	}
+
+	logs := NewExecutionLog(m.cfg.Global.Thread, g.MaxAction())
 	txns := make([]db.Txn, m.cfg.Global.Thread)
 	doneCh := make(chan struct{}, 1)
 	errCh := make(chan error, 1)

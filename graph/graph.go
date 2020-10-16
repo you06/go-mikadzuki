@@ -26,17 +26,11 @@ type Graph struct {
 	timelines  []Timeline
 	dependency int
 	schema     *kv.Schema
-	order      []ActionLoc
 	graphMap   map[ActionTp]int
 	graphSum   int
 	dependMap  map[DependTp]int
 	dependSum  int
 	ticker     util.Ticker
-}
-
-type ActionLoc struct {
-	tID int
-	aID int
 }
 
 func NewGraph(kvManager *kv.Manager, cfg *config.Config) *Graph {
@@ -46,7 +40,6 @@ func NewGraph(kvManager *kv.Manager, cfg *config.Config) *Graph {
 		timelines:  []Timeline{},
 		dependency: 0,
 		schema:     kvManager.NewSchema(),
-		order:      []ActionLoc{},
 		ticker:     util.NewTicker(time.Second),
 	}
 	g.CalcDependSum()
@@ -66,6 +59,22 @@ func (g *Graph) GetTimeline(n int) *Timeline {
 		return &g.timelines[n]
 	}
 	return nil
+}
+
+func (g *Graph) GetTxn(tID, xID int) *Txn {
+	timeline := g.GetTimeline(tID)
+	if timeline == nil {
+		return nil
+	}
+	return timeline.GetTxn(xID)
+}
+
+func (g *Graph) GetAction(tID, xID, aID int) *Action {
+	timeline := g.GetTimeline(tID)
+	if timeline == nil {
+		return nil
+	}
+	return timeline.GetAction(xID, aID)
 }
 
 func (g *Graph) CalcGraphSum() {
@@ -267,88 +276,10 @@ func (g *Graph) Anomaly(before, action *Action, short [][2]int) {
 	actionTxn := g.GetTimeline(action.tID).GetTxn(action.xID)
 
 	beforeTxn.lockSQLs = append(beforeTxn.lockSQLs, beforeSQL)
-	actionTxn.fetchLockSQL = &afterSQL
 	actionTxn.abortByErr = true
-	actionTxn.abortBy = struct {
-		tID int
-		xID int
-		aID int
-	}{tID: before.tID, xID: before.xID, aID: before.id}
 
 	for _, depend := range actionTxn.endOuts {
 		g.UnConnectTxn(actionTxn.tID, actionTxn.id, depend.tID, depend.xID, depend.tp)
-	}
-
-	g.Abort(action.tID, action.xID)
-	// change `SELECT` to `SELECT FOR UPDATE`
-	for i := 1; i < len(short); i++ {
-		index := i
-		if i == 0 {
-			index = 1
-		}
-		txn := g.GetTimeline(short[index][0]).GetTxn(short[index][1])
-		for j := 0; j < txn.allocID; j++ {
-			action := txn.GetAction(j)
-			addLock := false
-			for _, inDepend := range action.ins {
-				if inDepend.tID == short[index-1][0] && inDepend.xID == short[index-1][1] {
-					if inDepend.tp == WR {
-						if !addLock {
-							if action.tp == Select {
-								action.tp = SelectForUpdate
-								pair := g.schema.GetKV(action.kID)
-								if action.vID == kv.NULL_VALUE_ID && pair.DeleteVal != kv.INVALID_VALUE_ID {
-									action.vID = pair.DeleteVal
-								}
-								action.SQL = pair.GetValueNoTxnForUpdateWithID(g.schema, action.vID)
-							}
-							addLock = true
-						} else {
-							action.beforeWrite = g.GetTimeline(action.beforeWrite.tID).
-								GetTxn(action.beforeWrite.xID).
-								GetAction(action.beforeWrite.aID).beforeWrite
-							if action.beforeWrite != INVALID_DEPEND {
-								before := g.GetTimeline(action.beforeWrite.tID).
-									GetTxn(action.beforeWrite.xID).
-									GetAction(action.beforeWrite.aID)
-								action.vID = before.vID
-								g.ConnectTxn(before.tID, before.xID, txn.tID, txn.id, WR)
-							} else {
-								action.vID = kv.NULL_VALUE_ID
-							}
-						}
-					}
-					if i == 0 && inDepend.tp == RW {
-						before := g.GetTimeline(inDepend.tID).GetTxn(inDepend.xID).GetAction(inDepend.aID)
-						if before.tp == Select {
-							before.tp = SelectForUpdate
-							pair := g.schema.GetKV(before.kID)
-							if before.vID == kv.NULL_VALUE_ID && pair.DeleteVal != kv.INVALID_VALUE_ID {
-								before.vID = pair.DeleteVal
-							}
-							before.SQL = pair.GetValueNoTxnForUpdateWithID(g.schema, before.vID)
-						}
-						break
-					}
-				}
-			}
-			newStartIns := []Depend{}
-			for _, inDepend := range txn.startIns {
-				if !(inDepend.tID == short[index-1][0] && inDepend.xID == short[index-1][1]) {
-					newStartIns = append(newStartIns, inDepend)
-				}
-			}
-			txn.startIns = newStartIns
-		}
-	}
-	if action.tp == Select {
-		action.tp = SelectForUpdate
-		// pair := g.schema.GetKV(action.kID)
-		// if action.vID == kv.NULL_VALUE_ID && pair.DeleteVal != kv.INVALID_VALUE_ID {
-		// 	action.vID = pair.DeleteVal
-		// }
-		// action.SQL = pair.GetValueNoTxnForUpdateWithID(g.schema, action.vID)
-		action.SQL += " FOR UPDATE"
 	}
 
 OUTER:
@@ -367,9 +298,12 @@ OUTER:
 			break
 		}
 	}
+
+	action.kID = lockKV.ID
+	action.vID = lockKV.Latest
 	action.SQL = afterSQL
 	action.tp = Update
-	action.abortSelf = true
+	action.mayAbortSelf = true
 	action.ExpectedErrorMsg = "Deadlock"
 	action.abortBlock = &Depend{
 		tID: before.tID,
@@ -377,7 +311,140 @@ OUTER:
 		aID: before.id,
 		tp:  WW,
 	}
-	before.abortOther = true
+	action.cycle = g.MakeCycle(short)
+}
+
+func (g *Graph) MakeCycle(short [][2]int) *Cycle {
+	cycle := EmptyCycle()
+	blockPoint := make(map[int]int)
+	for i := 0; i < len(short)-1; i++ {
+		beforeTID := short[i][0]
+		beforeXID := short[i][1]
+		afterTID := short[i+1][0]
+		afterXID := short[i+1][1]
+		beforeTxn := g.GetTxn(beforeTID, beforeXID)
+		afterTxn := g.GetTxn(afterTID, afterXID)
+		util.AssertNotNil(beforeTxn)
+		util.AssertNotNil(afterTxn)
+
+		for j := 0; j < beforeTxn.allocID; j++ {
+			beforeAction := beforeTxn.GetAction(j)
+			depend := INVALID_DEPEND
+			for _, d := range beforeAction.outs {
+				if d.tID == afterTID && d.xID == afterXID {
+					depend = d
+					break
+				}
+			}
+			if depend == INVALID_DEPEND {
+				if j == beforeTxn.allocID-1 {
+					panic("dependency not found")
+				}
+				continue
+			}
+			afterAction := afterTxn.GetAction(depend.aID)
+			afterAction.mayAbortSelf = true
+			afterAction.cycle = &cycle
+			if aID, ok := blockPoint[beforeTID]; ok && aID < beforeAction.id {
+				// move before action
+				// w(x, 1)
+				// w(x, 2)(block here) -> w(y, 1))(unreachable)
+				// w(y, 2)
+				// will be changed to
+				// w(x, 1)
+				// w(y, 1) -> w(x, 2)(block here)
+				// w(y, 2))(block here)
+				blockPoint[beforeTID] = aID + 1
+				g.MoveBefore(beforeTID, beforeXID, aID, beforeAction.id)
+			}
+			blockPoint[afterTID] = afterAction.id
+			switch depend.tp {
+			case WR:
+				g.Select2SelectForUpdate(afterAction)
+				g.UnConnectTxn(beforeTID, beforeXID, afterTID, afterXID, WR)
+			case RW:
+				g.Select2SelectForUpdate(beforeAction)
+			}
+			break
+		}
+	}
+	return &cycle
+}
+
+func (g *Graph) Select2SelectForUpdate(action *Action) {
+	util.AssertIN(action.tp, []interface{}{Select, SelectForUpdate})
+	if action.tp == SelectForUpdate {
+		return
+	}
+	pair := g.schema.GetKV(action.kID)
+	if action.vID == kv.NULL_VALUE_ID && pair.DeleteVal != kv.INVALID_VALUE_ID {
+		action.vID = pair.DeleteVal
+	}
+	action.SQL = pair.GetValueNoTxnForUpdateWithID(g.schema, action.vID)
+}
+
+func (g *Graph) MoveBefore(tID, xID, a1, a2 int) {
+	txn := g.GetTxn(tID, xID)
+	if a1 >= txn.allocID || a2 >= txn.allocID || a1 >= a2 {
+		return
+	}
+	action := txn.actions[a2]
+	for i := a2 - 1; i >= a1; i-- {
+		txn.actions[i].id += 1
+		txn.actions[i+1] = txn.actions[i]
+	}
+	txn.actions[a1] = action
+	inMap := make(map[Location]struct{})
+	outMap := make(map[Location]struct{})
+	for i := a1; i <= a2; i++ {
+		action := txn.GetAction(i)
+
+		for _, depend := range action.ins {
+			location := LocationFromDepend(&depend)
+			if _, ok := inMap[location]; ok {
+				continue
+			}
+			before := g.GetAction(depend.tID, depend.xID, depend.aID)
+			for i, out := range before.outs {
+				if out.tID == tID && out.xID == xID &&
+					out.aID >= a1 && out.aID <= a2 {
+					if out.aID == a2 {
+						before.outs[i].aID = a1
+					} else {
+						before.outs[i].aID += 1
+					}
+				}
+			}
+			if before.kvNext != nil &&
+				before.kvNext.tID == tID && before.kvNext.xID == xID &&
+				before.kvNext.aID >= a1 && before.kvNext.aID <= a2 {
+				if before.kvNext.aID == a2 {
+					before.kvNext.aID = a1
+				} else {
+					before.kvNext.aID += 1
+				}
+			}
+			inMap[location] = struct{}{}
+		}
+		for _, depend := range action.outs {
+			location := LocationFromDepend(&depend)
+			if _, ok := outMap[location]; ok {
+				continue
+			}
+			after := g.GetAction(depend.tID, depend.xID, depend.aID)
+			for i, in := range after.ins {
+				if in.tID == tID && in.xID == xID &&
+					in.aID >= a1 && in.aID <= a2 {
+					if in.aID == a2 {
+						after.ins[i].aID = a1
+					} else {
+						after.ins[i].aID += 1
+					}
+				}
+			}
+			outMap[location] = struct{}{}
+		}
+	}
 }
 
 // Abort a txn
@@ -424,6 +491,11 @@ func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
 			beforeVID = g.GetTimeline(action.beforeWrite.tID).
 				GetTxn(action.beforeWrite.xID).
 				GetAction(action.beforeWrite.aID).vID
+			if beforeVID == kv.INVALID_VALUE_ID {
+				fmt.Println(*g.GetTimeline(action.beforeWrite.tID).
+					GetTxn(action.beforeWrite.xID).
+					GetAction(action.beforeWrite.aID))
+			}
 		}
 		switch action.tp {
 		case Select:
@@ -551,12 +623,34 @@ func (g *Graph) IfCycle(t1, x1, t2, x2 int, tp DependTp) (bool, [][2]int) {
 	return cycle, path
 }
 
+func (g *Graph) ConnectAction(t1, x1, a1, t2, x2, a2 int, tp DependTp) {
+	if t1 == t2 && x1 == x2 && a1 == a2 {
+		return
+	}
+	action1 := g.GetAction(t1, x1, a1)
+	action2 := g.GetAction(t2, x2, a2)
+	depend1 := Depend{
+		tID: t2,
+		xID: x2,
+		aID: a2,
+		tp:  tp,
+	}
+	depend2 := Depend{
+		tID: t1,
+		xID: x1,
+		aID: a1,
+		tp:  tp,
+	}
+	action1.outs = append(action1.outs, depend1)
+	action2.ins = append(action2.ins, depend2)
+}
+
 func (g *Graph) ConnectTxn(t1, x1, t2, x2 int, tp DependTp) {
 	if t1 == t2 && x1 == x2 {
 		return
 	}
-	txn1 := g.GetTimeline(t1).GetTxn(x1)
-	txn2 := g.GetTimeline(t2).GetTxn(x2)
+	txn1 := g.GetTxn(t1, x1)
+	txn2 := g.GetTxn(t2, x2)
 	depend1 := Depend{
 		tID: t2,
 		xID: x2,

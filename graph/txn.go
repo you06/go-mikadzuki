@@ -21,14 +21,7 @@ type Txn struct {
 	ifEnd      bool
 	ifReady    bool
 	abortByErr bool
-	abortBy    struct {
-		tID int
-		xID int
-		aID int
-	}
-	cycle        *Cycle
-	lockSQLs     []string
-	fetchLockSQL *string
+	lockSQLs   []string
 }
 
 func NewTxn(id, tID int, s Status) Txn {
@@ -144,11 +137,37 @@ func (t *Txn) EndSQL() string {
 	}
 }
 
+type Location struct {
+	tID int
+	xID int
+	aID int
+}
+
+func LocationFromDepend(depend *Depend) Location {
+	return Location{
+		tID: depend.tID,
+		xID: depend.xID,
+		aID: depend.aID,
+	}
+}
+
+func LocationFromAction(action *Action) Location {
+	return Location{
+		tID: action.tID,
+		xID: action.xID,
+		aID: action.id,
+	}
+}
+
 type Cycle struct {
-	txns []struct {
-		tID int
-		xID int
-		aID int
+	txns               []Location
+	realtimeBlockPairs []RealtimeBlockPair
+}
+
+func EmptyCycle() Cycle {
+	return Cycle{
+		txns:               []Location{},
+		realtimeBlockPairs: []RealtimeBlockPair{},
 	}
 }
 
@@ -160,4 +179,9 @@ func (c *Cycle) IfAbort(g *Graph) bool {
 		}
 	}
 	return false
+}
+
+type RealtimeBlockPair struct {
+	from Location
+	to   Location
 }
