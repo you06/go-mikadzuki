@@ -113,6 +113,11 @@ func TestInsertSQL(t *testing.T) {
 	require.Equal(t, insertSQL, `INSERT INTO t1 VALUES(18, "kaeru", "1919-08-10")`)
 }
 
+func TestInsertUpdateSQL(t *testing.T) {
+	insertUpdateSQL := schema.InsertUpdateSQL(0, 1)
+	require.Equal(t, insertUpdateSQL, `INSERT INTO t1 VALUES(18, "kaeru", "1919-08-10") ON DUPLICATE KEY UPDATE id=18, k="1919-08-10"`)
+}
+
 func TestReplace(t *testing.T) {
 	newID := schema.RepValue(0, 0)
 	require.Equal(t, schema.Data[newID][0], 17)

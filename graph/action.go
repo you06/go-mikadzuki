@@ -3,7 +3,7 @@ package graph
 import (
 	"fmt"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"github.com/you06/go-mikadzuki/kv"
 )
@@ -27,9 +27,12 @@ type Action struct {
 	vID       int
 	knowValue bool
 	SQL       string
-	lock      *sync.RWMutex
-	ifExec    bool
-	ifReady   bool
+	// execution phase
+	// 0: not ready
+	// 1: ready to execute
+	// 2: executed but not returned
+	// 3: value returned, exec done, can set next action to ready state
+	phase int64
 	// anomaly fields
 	ExpectedErrorMsg string
 	abortOther       bool
@@ -117,9 +120,7 @@ func NewAction(id, tID, xID int, tp ActionTp) Action {
 		knowValue:    false,
 		vID:          kv.INVALID_VALUE_ID,
 		SQL:          "",
-		lock:         &sync.RWMutex{},
-		ifExec:       false,
-		ifReady:      false,
+		phase:        0,
 		abortOther:   false,
 		abortSelf:    false,
 		mayAbortSelf: false,
@@ -263,28 +264,28 @@ func DependTpFromActionTps(t1, t2 ActionTp) DependTp {
 	panic(fmt.Sprintf("unsuppert ActionTp %s, %s", t1, t2))
 }
 
-func (a *Action) SetExec(b bool) {
-	a.lock.Lock()
-	a.ifExec = b
-	a.lock.Unlock()
-}
-
-func (a *Action) GetExec() bool {
-	a.lock.RLock()
-	defer a.lock.RUnlock()
-	return a.ifExec
-}
-
-func (a *Action) SetReady(b bool) {
-	a.lock.Lock()
-	a.ifReady = b
-	a.lock.Unlock()
+func (a *Action) SetReady() {
+	atomic.StoreInt64(&a.phase, 1)
 }
 
 func (a *Action) GetReady() bool {
-	a.lock.RLock()
-	defer a.lock.RUnlock()
-	return a.ifReady
+	return atomic.LoadInt64(&a.phase) >= 1
+}
+
+func (a *Action) SetExec() {
+	atomic.StoreInt64(&a.phase, 2)
+}
+
+func (a *Action) GetExec() bool {
+	return atomic.LoadInt64(&a.phase) >= 2
+}
+
+func (a *Action) SetDone() {
+	atomic.StoreInt64(&a.phase, 3)
+}
+
+func (a *Action) GetDone() bool {
+	return atomic.LoadInt64(&a.phase) >= 3
 }
 
 func (a *Action) String() string {
@@ -292,6 +293,7 @@ func (a *Action) String() string {
 	if a.mayAbortSelf {
 		b.WriteByte('*')
 	}
+	fmt.Fprintf(&b, "(%d)", a.id)
 	b.WriteString(string(a.tp))
 	fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
 	if a.abortSelf {

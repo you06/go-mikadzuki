@@ -32,8 +32,7 @@ func (t *Timeline) String() string {
 func (t *Timeline) NewTxnWithStatus(s Status) *Txn {
 	id := t.allocID
 	t.allocID += 1
-	txn := NewTxn(id, t.id, s)
-	t.txns = append(t.txns, txn)
+	t.txns = append(t.txns, NewTxn(id, t.id, s))
 	return &t.txns[id]
 }
 

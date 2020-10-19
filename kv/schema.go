@@ -47,6 +47,7 @@ func (s *Schema) AddColumn(mustPrimary bool) {
 		primary = util.RdBoolRatio(PRIMARY_RATIO)
 	}
 	if primary {
+		// TODO: the key length should not over 3072 bytes
 		s.Primary = append(s.Primary, len(s.Columns))
 	}
 	column := Column{
@@ -59,6 +60,8 @@ func (s *Schema) AddColumn(mustPrimary bool) {
 	s.Columns = append(s.Columns, column)
 }
 
+// AddUnique creates unique key
+// TODO: the key length should not over 3072 bytes
 func (s *Schema) AddUnique() {
 	var unique []int
 	for i := 0; i < len(s.Columns); i++ {
@@ -229,6 +232,14 @@ func (s *Schema) AssignPrimaryKeyPart(oldValue, newValue *[]interface{}) {
 	}
 }
 
+func (s *Schema) AssignUniqueKey(oldValue, newValue *[]interface{}) {
+	unique := s.Unique[util.RdRange(0, len(s.Unique))]
+	for i := 0; i < len(unique); i++ {
+		pos := unique[i]
+		(*newValue)[pos] = (*oldValue)[pos]
+	}
+}
+
 func (s *Schema) MakeUniqueKey(value []interface{}, uniqueKeys *[][]string) {
 	for i := 0; i < len(s.Unique); i++ {
 		uniqueKey := make([]string, len(s.Unique[i]))
@@ -327,15 +338,17 @@ func (s *Schema) ReplaceValue(newID, oldID int) {
 	}
 	var value []interface{}
 	var oldValue []interface{}
+	oldPrimaryKey := make([]string, len(s.Primary))
+	oldUniqueKeys := make([][]string, len(s.Unique))
 	primaryKey := make([]string, len(s.Primary))
 	uniqueKeys := make([][]string, len(s.Unique))
 
 	if oldID != NULL_VALUE_ID {
 		oldValue = s.Data[oldID]
-		s.MakePrimaryKey(oldValue, &primaryKey)
-		s.MakeUniqueKey(oldValue, &uniqueKeys)
-		s.DelPrimaryKey(primaryKey)
-		s.DelUniqueKeys(uniqueKeys)
+		s.MakePrimaryKey(oldValue, &oldPrimaryKey)
+		s.MakeUniqueKey(oldValue, &oldUniqueKeys)
+		s.DelPrimaryKey(oldPrimaryKey)
+		s.DelUniqueKeys(oldUniqueKeys)
 	}
 	for {
 		value = s.MakeValue()
@@ -352,6 +365,8 @@ func (s *Schema) ReplaceValue(newID, oldID int) {
 		// add new index
 		s.AddPrimaryKey(primaryKey)
 		s.AddUniqueKeys(uniqueKeys)
+		s.AddPrimaryKey(oldPrimaryKey)
+		s.AddUniqueKeys(oldUniqueKeys)
 		break
 	}
 	// check if index valid
@@ -359,15 +374,16 @@ func (s *Schema) ReplaceValue(newID, oldID int) {
 }
 
 func (s *Schema) DeleteValue(vID int) {
-	if vID == NULL_VALUE_ID {
-		return
-	}
-	primaryKey := make([]string, len(s.Primary))
-	uniqueKeys := make([][]string, len(s.Unique))
-	s.MakePrimaryKey(s.Data[vID], &primaryKey)
-	s.MakeUniqueKey(s.Data[vID], &uniqueKeys)
-	s.DelPrimaryKey(primaryKey)
-	s.DelUniqueKeys(uniqueKeys)
+	// do not delete index
+	// if vID == NULL_VALUE_ID {
+	// 	return
+	// }
+	// primaryKey := make([]string, len(s.Primary))
+	// uniqueKeys := make([][]string, len(s.Unique))
+	// s.MakePrimaryKey(s.Data[vID], &primaryKey)
+	// s.MakeUniqueKey(s.Data[vID], &uniqueKeys)
+	// s.DelPrimaryKey(primaryKey)
+	// s.DelUniqueKeys(uniqueKeys)
 }
 
 func (s *Schema) SelectSQL(id int) string {
@@ -481,6 +497,26 @@ func (s *Schema) ReplaceSQL(id int) string {
 		b.WriteString(s.Columns[i].Tp.ValToString(item))
 	}
 	b.WriteString(")")
+	return b.String()
+}
+
+func (s *Schema) InsertUpdateSQL(oldID, newID int) string {
+	if oldID == -1 {
+		return s.ReplaceSQL(newID)
+	}
+	oldData, newData := s.Data[oldID], s.Data[newID]
+	var b strings.Builder
+	b.WriteString(s.InsertSQL(newID))
+	b.WriteString(" ON DUPLICATE KEY UPDATE ")
+
+	ds := len(s.Columns)
+	var patches []string
+	for i := 0; i < ds; i++ {
+		if oldData[i] != newData[i] {
+			patches = append(patches, fmt.Sprintf("%s=%s", s.Columns[i].Name, s.Columns[i].Tp.ValToString(newData[i])))
+		}
+	}
+	b.WriteString(strings.Join(patches, ", "))
 	return b.String()
 }
 

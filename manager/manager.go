@@ -53,6 +53,7 @@ func (m *Manager) Run(ctx context.Context) {
 }
 
 func (m *Manager) Once(ctx context.Context) error {
+	startTime := util.NowStr()
 	if !m.opt.Dryrun {
 		if err := m.initDB(); err != nil {
 			return err
@@ -60,7 +61,7 @@ func (m *Manager) Once(ctx context.Context) error {
 	}
 	g := m.graphMgr.NewGraph(m.cfg.Global.Thread, m.cfg.Global.Action)
 	if m.cfg.Global.LogPath != "" {
-		m.DumpGraph(g)
+		m.DumpGraph(g, startTime)
 	}
 
 	if m.opt.Dryrun {
@@ -133,13 +134,13 @@ func (m *Manager) Once(ctx context.Context) error {
 			return rows, res, err
 		}); err != nil {
 			if m.cfg.Global.LogPath != "" {
-				m.DumpResult(logs)
+				m.DumpResult(logs, startTime)
 			}
 			_ = m.closeDB()
 			errCh <- err
 		} else {
 			if m.cfg.Global.LogPath != "" {
-				m.DumpResult(logs)
+				m.DumpResult(logs, startTime)
 			}
 			_ = m.closeDB()
 			doneCh <- struct{}{}
@@ -147,7 +148,7 @@ func (m *Manager) Once(ctx context.Context) error {
 	}()
 	select {
 	case <-ctx.Done():
-		m.DumpResult(logs)
+		m.DumpResult(logs, startTime)
 		return nil
 	case err := <-errCh:
 		return err

@@ -210,7 +210,9 @@ func TestMoveBefore(t *testing.T) {
 		return graph
 	}
 	graph := case1()
+	before := graph.GetAction(1, 0, 0)
 	graph.MoveBefore(1, 0, 0, 2)
+	require.Equal(t, *before, *graph.GetAction(1, 0, 1))
 	require.Equal(t, graph.GetAction(1, 0, 0).id, 0)
 	require.Equal(t, graph.GetAction(1, 0, 1).id, 1)
 	require.Equal(t, graph.GetAction(1, 0, 2).id, 2)

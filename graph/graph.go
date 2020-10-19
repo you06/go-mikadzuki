@@ -309,7 +309,6 @@ OUTER:
 	action.SQL = afterSQL
 	action.tp = Update
 	action.mayAbortSelf = true
-	action.ExpectedErrorMsg = "Deadlock"
 	action.abortBlock = &Depend{
 		tID: before.tID,
 		xID: before.xID,
@@ -317,12 +316,12 @@ OUTER:
 		tp:  WW,
 	}
 	action.cycle = g.MakeCycle(short)
-	action.cycle.Add(action)
-	fmt.Println(action.cycle.String())
+	action.cycle.Add(LocationFromAction(action))
+	fmt.Println("cycle done:", action.cycle.String())
 }
 
 func (g *Graph) MakeCycle(short [][2]int) *Cycle {
-	cycle := EmptyCycle()
+	cycle := EmptyCycle(g)
 	blockPoint := make(map[int]int)
 	for i := 0; i < len(short)-1; i++ {
 		beforeTID := short[i][0]
@@ -378,7 +377,7 @@ func (g *Graph) MakeCycle(short [][2]int) *Cycle {
 				helperTo.SQL = afterSQL
 				blockPoint[beforeTID] = aID + 1
 				afterAction = helperTo
-				g.ConnectAction(beforeTID, beforeXID, beforeAction.id, afterTID, afterXID, afterAction.id, WW)
+				g.ConnectAction(beforeTID, beforeXID, aID, afterTID, afterXID, afterAction.id, WW)
 
 				// There is a harder way, we can chagne the dependency for same key, eg.
 				// w(x, 1)
@@ -400,22 +399,19 @@ func (g *Graph) MakeCycle(short [][2]int) *Cycle {
 				// 	}
 				// 	cycle.AddBlockPair(RealtimeBlockPairFromActions(beforeAction, afterAction))
 				// }
-
-				fmt.Println("moved", afterAction.tID, afterAction.xID, afterAction.id)
 			} else {
-				fmt.Println("unmoved", afterAction.tID, afterAction.xID, afterAction.id)
+				switch depend.tp {
+				case WR:
+					g.Select2SelectForUpdate(afterAction)
+					g.UnConnectTxn(beforeTID, beforeXID, afterTID, afterXID, WR)
+				case RW:
+					g.Select2SelectForUpdate(beforeAction)
+				}
 			}
 			afterAction.mayAbortSelf = true
 			afterAction.cycle = &cycle
-			cycle.Add(afterAction)
+			cycle.Add(LocationFromAction(afterAction))
 			blockPoint[afterTID] = afterAction.id
-			switch depend.tp {
-			case WR:
-				g.Select2SelectForUpdate(afterAction)
-				g.UnConnectTxn(beforeTID, beforeXID, afterTID, afterXID, WR)
-			case RW:
-				g.Select2SelectForUpdate(beforeAction)
-			}
 			break
 		}
 	}
@@ -427,6 +423,7 @@ func (g *Graph) Select2SelectForUpdate(action *Action) {
 	if action.tp == SelectForUpdate {
 		return
 	}
+	action.tp = SelectForUpdate
 	pair := g.schema.GetKV(action.kID)
 	if action.vID == kv.NULL_VALUE_ID && pair.DeleteVal != kv.INVALID_VALUE_ID {
 		action.vID = pair.DeleteVal
@@ -448,9 +445,23 @@ func (g *Graph) MoveBefore(tID, xID, a1, a2 int) {
 	}
 	action := txn.actions[a2]
 	action.id = a1
+	if action.cycle != nil {
+		action.cycle.Update(Location{
+			tID: action.tID,
+			xID: action.xID,
+			aID: a2,
+		}, LocationFromAction(&action))
+	}
 	for i := a2 - 1; i >= a1; i-- {
 		txn.actions[i].id += 1
 		txn.actions[i+1] = txn.actions[i]
+		if txn.actions[i+1].cycle != nil {
+			txn.actions[i+1].cycle.Update(Location{
+				tID: txn.actions[i+1].tID,
+				xID: txn.actions[i+1].xID,
+				aID: txn.actions[i+1].id - 1,
+			}, LocationFromAction(&txn.actions[i+1]))
+		}
 	}
 	txn.actions[a1] = action
 	inMap := make(map[Location]struct{})
@@ -523,6 +534,7 @@ func (g *Graph) Abort(tID, xID int) {
 			aID: action.id,
 			tp:  WW,
 		}
+		pair := g.schema.GetKV(action.kID)
 		for {
 			if action.kvNext == nil {
 				break
@@ -538,11 +550,13 @@ func (g *Graph) Abort(tID, xID int) {
 			}
 			next.beforeWrite = overwrite
 			action = next
+			g.AssignPair(pair, action)
 		}
 	}
 }
 
 func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
+	action.kID = pair.ID
 	switch action.tp {
 	case Select, SelectForUpdate:
 		beforeVID := kv.NULL_VALUE_ID
@@ -550,11 +564,6 @@ func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
 			beforeVID = g.GetTimeline(action.beforeWrite.tID).
 				GetTxn(action.beforeWrite.xID).
 				GetAction(action.beforeWrite.aID).vID
-			if beforeVID == kv.INVALID_VALUE_ID {
-				fmt.Println(*g.GetTimeline(action.beforeWrite.tID).
-					GetTxn(action.beforeWrite.xID).
-					GetAction(action.beforeWrite.aID))
-			}
 		}
 		switch action.tp {
 		case Select:
@@ -562,6 +571,7 @@ func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
 		case SelectForUpdate:
 			action.SQL = pair.GetValueNoTxnForUpdateWithID(g.schema, beforeVID)
 		}
+		action.vID = beforeVID
 	case Insert:
 		if pair.Latest == kv.NULL_VALUE_ID {
 			action.SQL = pair.NewValueNoTxn(g.schema)
@@ -576,7 +586,6 @@ func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
 	default:
 		panic(fmt.Sprintf("unsupport assign, ActionTp: %s", action.tp))
 	}
-	action.kID = pair.ID
 	action.vID = pair.Latest
 }
 
@@ -883,35 +892,31 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 							case <-execDone:
 								return
 							default:
-								action.SetExec(true)
+								action.SetExec()
 								fmt.Println("hang in exec", action.tID, action.xID, action.id)
 							}
 						}
 					}()
 					rows, _, err = exec(i, action.tp, action.SQL)
 					execDone <- struct{}{}
-
+					action.SetExec()
+					action.SetDone()
 					// end this transaction
-					if action.abortSelf {
-						if err == nil {
-							errCh <- errors.Errorf("expect error: %s but got nil\naction: %s", action.ExpectedErrorMsg, action)
+					if action.mayAbortSelf {
+						if err == nil && action.cycle.GetDone() && !action.cycle.GetErr() {
+							errCh <- errors.Errorf("expect error: %s but got nil\ncycle: %s", DEADLOCK_ERROR_MESSAGE, action.cycle)
 							return
 						}
-						if err != nil && !strings.Contains(err.Error(), action.ExpectedErrorMsg) {
-							errCh <- errors.Errorf("expect %s error, but got: %s\naction: %s", action.ExpectedErrorMsg, err.Error(), action)
-							return
+						if err != nil && strings.Contains(err.Error(), DEADLOCK_ERROR_MESSAGE) {
+							action.cycle.SetErr()
+							action.cycle.SetDone()
+							g.Abort(txn.tID, txn.id)
+							txn.SetEnd(true)
+							if next := timeline.GetTxn(j + 1); next != nil {
+								next.SetReady(true)
+							}
+							break
 						}
-						action.SetExec(true)
-						for ; k < txn.allocID; k++ {
-							action = txn.GetAction(k)
-							action.SetReady(true)
-							action.SetExec(true)
-						}
-						txn.SetEnd(true)
-						if next := timeline.GetTxn(j + 1); next != nil {
-							next.SetReady(true)
-						}
-						break
 					} else if err != nil {
 						errCh <- err
 						return
@@ -930,9 +935,9 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 					if rows != nil {
 						rows.Close()
 					}
-					action.SetExec(true)
+					action.SetExec()
 					if next := txn.GetAction(k + 1); next != nil {
-						next.SetReady(true)
+						next.SetReady()
 					}
 				}
 				progress[i]++
