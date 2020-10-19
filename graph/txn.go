@@ -160,20 +160,20 @@ func LocationFromAction(action *Action) Location {
 }
 
 type Cycle struct {
-	txns               []Location
+	actions            []*Action
 	realtimeBlockPairs []RealtimeBlockPair
 }
 
 func EmptyCycle() Cycle {
 	return Cycle{
-		txns:               []Location{},
+		actions:            []*Action{},
 		realtimeBlockPairs: []RealtimeBlockPair{},
 	}
 }
 
 func (c *Cycle) IfAbort(g *Graph) bool {
-	for _, t := range c.txns {
-		txn := g.GetTimeline(t.tID).GetTxn(t.xID)
+	for _, action := range c.actions {
+		txn := g.GetTimeline(action.tID).GetTxn(action.xID)
 		if txn.abortByErr {
 			return true
 		}
@@ -181,7 +181,35 @@ func (c *Cycle) IfAbort(g *Graph) bool {
 	return false
 }
 
+func (c *Cycle) Add(action *Action) {
+	c.actions = append(c.actions, action)
+}
+
+func (c *Cycle) AddBlockPair(pair RealtimeBlockPair) {
+	c.realtimeBlockPairs = append(c.realtimeBlockPairs, pair)
+}
+
+func (c *Cycle) String() string {
+	var b strings.Builder
+	b.WriteByte('[')
+	for i, action := range c.actions {
+		if i != 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "[%d %d %d]", action.tID, action.xID, action.id)
+	}
+	b.WriteByte(']')
+	return b.String()
+}
+
 type RealtimeBlockPair struct {
 	from Location
 	to   Location
+}
+
+func RealtimeBlockPairFromActions(from, to *Action) RealtimeBlockPair {
+	return RealtimeBlockPair{
+		from: LocationFromAction(from),
+		to:   LocationFromAction(to),
+	}
 }

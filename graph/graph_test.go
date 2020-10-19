@@ -55,6 +55,7 @@ func TestConnectTxnAndSimpleCycle(t *testing.T) {
 								tp:  WR,
 							},
 						},
+						lockSQLs: []string{},
 					},
 				},
 			},
@@ -76,8 +77,9 @@ func TestConnectTxnAndSimpleCycle(t *testing.T) {
 								tp:  WR,
 							},
 						},
-						endIns:  []Depend{},
-						endOuts: []Depend{},
+						endIns:   []Depend{},
+						endOuts:  []Depend{},
+						lockSQLs: []string{},
 					},
 				},
 			},
@@ -209,6 +211,9 @@ func TestMoveBefore(t *testing.T) {
 	}
 	graph := case1()
 	graph.MoveBefore(1, 0, 0, 2)
+	require.Equal(t, graph.GetAction(1, 0, 0).id, 0)
+	require.Equal(t, graph.GetAction(1, 0, 1).id, 1)
+	require.Equal(t, graph.GetAction(1, 0, 2).id, 2)
 	require.Equal(t, graph.GetAction(0, 0, 0).outs, []Depend{
 		newDepend(1, 0, 1, WW),
 		newDepend(1, 0, 2, WW),

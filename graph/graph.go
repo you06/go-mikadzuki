@@ -271,12 +271,12 @@ func (g *Graph) Anomaly(before, action *Action, short [][2]int) {
 	// TODO: action's txn may be committed successfully, we can reuse lockKV
 	lockKV := g.schema.NewKV()
 	beforeSQL := lockKV.NewValueNoTxn(g.schema)
+	beforeVID := lockKV.Latest
 	afterSQL := lockKV.PutValueNoTxn(g.schema)
 	beforeTxn := g.GetTimeline(before.tID).GetTxn(before.xID)
 	actionTxn := g.GetTimeline(action.tID).GetTxn(action.xID)
 
-	beforeTxn.lockSQLs = append(beforeTxn.lockSQLs, beforeSQL)
-	actionTxn.abortByErr = true
+	// beforeTxn.lockSQLs = append(beforeTxn.lockSQLs, beforeSQL)
 
 	for _, depend := range actionTxn.endOuts {
 		g.UnConnectTxn(actionTxn.tID, actionTxn.id, depend.tID, depend.xID, depend.tp)
@@ -299,6 +299,11 @@ OUTER:
 		}
 	}
 
+	lockAction := g.InsertBefore(before.tID, before.xID, 0, Insert)
+	lockAction.kID = lockKV.ID
+	lockAction.vID = beforeVID
+	lockAction.SQL = beforeSQL
+
 	action.kID = lockKV.ID
 	action.vID = lockKV.Latest
 	action.SQL = afterSQL
@@ -312,6 +317,8 @@ OUTER:
 		tp:  WW,
 	}
 	action.cycle = g.MakeCycle(short)
+	action.cycle.Add(action)
+	fmt.Println(action.cycle.String())
 }
 
 func (g *Graph) MakeCycle(short [][2]int) *Cycle {
@@ -343,20 +350,64 @@ func (g *Graph) MakeCycle(short [][2]int) *Cycle {
 				continue
 			}
 			afterAction := afterTxn.GetAction(depend.aID)
-			afterAction.mayAbortSelf = true
-			afterAction.cycle = &cycle
+			fmt.Println(afterAction.tID, afterAction.xID, afterAction.id)
 			if aID, ok := blockPoint[beforeTID]; ok && aID < beforeAction.id {
-				// move before action
+				// add new helper dependency
 				// w(x, 1)
-				// w(x, 2)(block here) -> w(y, 1))(unreachable)
+				// w(x, 2)(block here) -> w(y, 1)(unreachable)
 				// w(y, 2)
 				// will be changed to
 				// w(x, 1)
-				// w(y, 1) -> w(x, 2)(block here)
-				// w(y, 2))(block here)
+				// w(z, 1) -> w(x, 2)(block here) -> w(y, 1)
+				// w(z, 2)(block here) -> w(y, 2)
+				//
+				// w(y, 1) --WW-> w(y, 2) still exist after this
+				lockKV := g.schema.NewKV()
+				beforeSQL := lockKV.NewValueNoTxn(g.schema)
+				beforeVID := lockKV.Latest
+				afterSQL := lockKV.PutValueNoTxn(g.schema)
+				helperFrom := g.InsertBefore(beforeTID, beforeXID, aID, Insert)
+				helperFrom.kID = lockKV.ID
+				helperFrom.vID = beforeVID
+				helperFrom.tp = Insert
+				helperFrom.SQL = beforeSQL
+				helperTo := g.InsertBefore(afterTID, afterXID, afterAction.id, Update)
+				helperTo.kID = lockKV.ID
+				helperTo.vID = lockKV.Latest
+				helperTo.tp = Update
+				helperTo.SQL = afterSQL
 				blockPoint[beforeTID] = aID + 1
-				g.MoveBefore(beforeTID, beforeXID, aID, beforeAction.id)
+				afterAction = helperTo
+				g.ConnectAction(beforeTID, beforeXID, beforeAction.id, afterTID, afterXID, afterAction.id, WW)
+
+				// There is a harder way, we can chagne the dependency for same key, eg.
+				// w(x, 1)
+				// w(x, 2)(block here) -> w(x, 3)(unreachable)
+				// w(x, 4)
+				// will be changed to
+				// w(x, 1)
+				// w(x, 2)(block here) -> w(x, 3)(unreachable)
+				// w(x, 4)(execute after w(x, 2), the dependency from w(x, 3) -> w(x, 4) will be considered later)
+
+				// if beforeTxn.GetAction(aID).kID != beforeAction.kID {
+				// } else {
+				// 	// change dependency and make block pair
+				// 	for i, in := range afterAction.ins {
+				// 		if in.tID == beforeTID && in.xID == beforeXID {
+				// 			afterAction.ins[i].aID = aID
+				// 			break
+				// 		}
+				// 	}
+				// 	cycle.AddBlockPair(RealtimeBlockPairFromActions(beforeAction, afterAction))
+				// }
+
+				fmt.Println("moved", afterAction.tID, afterAction.xID, afterAction.id)
+			} else {
+				fmt.Println("unmoved", afterAction.tID, afterAction.xID, afterAction.id)
 			}
+			afterAction.mayAbortSelf = true
+			afterAction.cycle = &cycle
+			cycle.Add(afterAction)
 			blockPoint[afterTID] = afterAction.id
 			switch depend.tp {
 			case WR:
@@ -383,12 +434,20 @@ func (g *Graph) Select2SelectForUpdate(action *Action) {
 	action.SQL = pair.GetValueNoTxnForUpdateWithID(g.schema, action.vID)
 }
 
+func (g *Graph) InsertBefore(tID, xID, aID int, tp ActionTp) *Action {
+	txn := g.GetTxn(tID, xID)
+	action := txn.NewActionWithTp(tp)
+	g.MoveBefore(tID, xID, aID, action.id)
+	return txn.GetAction(aID)
+}
+
 func (g *Graph) MoveBefore(tID, xID, a1, a2 int) {
 	txn := g.GetTxn(tID, xID)
 	if a1 >= txn.allocID || a2 >= txn.allocID || a1 >= a2 {
 		return
 	}
 	action := txn.actions[a2]
+	action.id = a1
 	for i := a2 - 1; i >= a1; i-- {
 		txn.actions[i].id += 1
 		txn.actions[i+1] = txn.actions[i]
