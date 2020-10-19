@@ -89,7 +89,7 @@ func (g *Generator) NewGraph(conn, length int) *Graph {
 		}
 	}
 
-	for i := 0; i < conn; i++ {
+	for i := 0; i < conn*20; i++ {
 		graph.NewKV(i)
 	}
 

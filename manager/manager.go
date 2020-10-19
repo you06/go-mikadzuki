@@ -46,13 +46,14 @@ func (m *Manager) Run(ctx context.Context) {
 }
 
 func (m *Manager) Once() error {
+	startTime := util.NowStr()
 	if err := m.initDB(); err != nil {
 		return err
 	}
 	g := m.graphMgr.NewGraph(m.cfg.Global.Thread, m.cfg.Global.Action)
 	logs := NewExecutionLog(m.cfg.Global.Thread, g.MaxAction())
 	if m.cfg.Global.LogPath != "" {
-		m.DumpGraph(g)
+		m.DumpGraph(g, startTime)
 	}
 	for _, stmt := range g.GetSchemas() {
 		fmt.Println(stmt)
@@ -109,12 +110,12 @@ func (m *Manager) Once() error {
 		return rows, res, err
 	}); err != nil {
 		if m.cfg.Global.LogPath != "" {
-			m.DumpResult(logs)
+			m.DumpResult(logs, startTime)
 		}
 		return err
 	} else {
 		if m.cfg.Global.LogPath != "" {
-			m.DumpResult(logs)
+			m.DumpResult(logs, startTime)
 		}
 	}
 	if err := m.closeDB(); err != nil {

@@ -110,6 +110,7 @@ func (g *Graph) randDependTp() DependTp {
 }
 
 func (g *Graph) NewKV(t int) {
+	t = t % g.allocID
 	pair := g.schema.NewKV()
 	txn := g.GetTimeline(t).GetTxn(0)
 	action := txn.NewActionWithTp(Insert)
@@ -317,7 +318,7 @@ func (g *Graph) IterateGraph(exec func(int, int, ActionTp, string) (*sql.Rows, *
 	progress := make([]int, len(g.timelines))
 	ticker := util.NewTicker(time.Second)
 	ticker.Go(func() {
-		fmt.Println(progress)
+		// fmt.Println(progress)
 	})
 	for i := 0; i < g.allocID; i++ {
 		progress[i] = 0

@@ -25,8 +25,8 @@ var (
 	startPattern  = regexp.MustCompile(`.*\[(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{5}).*`)
 )
 
-func (m *Manager) DumpGraph(g *graph.Graph) {
-	logPath := path.Join(m.cfg.Global.LogPath, util.START_TIME)
+func (m *Manager) DumpGraph(g *graph.Graph, nowStr string) {
+	logPath := path.Join(m.cfg.Global.LogPath, nowStr)
 	if err := os.MkdirAll(logPath, 0755); err != nil {
 		fmt.Println("error create log dir", err)
 		return
@@ -51,8 +51,8 @@ func (m *Manager) DumpGraph(g *graph.Graph) {
 	}
 }
 
-func (m *Manager) DumpResult(logs *ExecutionLog) {
-	logPath := path.Join(m.cfg.Global.LogPath, util.START_TIME)
+func (m *Manager) DumpResult(logs *ExecutionLog, nowStr string) {
+	logPath := path.Join(m.cfg.Global.LogPath, nowStr)
 	for i := 0; i < logs.thread; i++ {
 		logFile, err := os.Create(path.Join(logPath, fmt.Sprintf("thread-%d.log", i)))
 		if err != nil {

@@ -68,7 +68,7 @@ func (k *KV) PutValueNoTxn(s *Schema) string {
 	oldID := k.Latest
 	newID := s.PutValue(k.ID, oldID)
 	k.Latest = newID
-	return s.UpdateSQL(oldID, newID)
+	return s.InsertUpdateSQL(oldID, newID)
 }
 
 func (k *KV) DelValueNoTxn(s *Schema) string {

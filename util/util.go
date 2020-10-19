@@ -15,7 +15,6 @@ var (
 	TS_MAX     = time.Date(2038, 1, 19, 3, 14, 7, 0, time.UTC).Unix()
 	TS_DELTA   = TS_MAX - TS_MIN
 	HASH_LEN   = 10
-	START_TIME = time.Now().Format("2006-01-02_15:04:05")
 )
 
 func init() {
@@ -71,4 +70,8 @@ func RdHash() string {
 		hash[i] = rune(RdRange(0x61, 0x7a))
 	}
 	return string(hash)
+}
+
+func NowStr() string {
+	return time.Now().Format("2006-01-02_15:04:05")
 }
