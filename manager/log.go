@@ -25,8 +25,8 @@ var (
 	startPattern  = regexp.MustCompile(`.*\[(\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}\.\d{5}).*`)
 )
 
-func (m *Manager) DumpGraph(g *graph.Graph) {
-	logPath := path.Join(m.cfg.Global.LogPath, util.START_TIME)
+func (m *Manager) DumpGraph(g *graph.Graph, startTime string) {
+	logPath := path.Join(m.cfg.Global.LogPath, startTime)
 	if err := os.MkdirAll(logPath, 0755); err != nil {
 		fmt.Println("error create log dir", err)
 		return
@@ -51,8 +51,8 @@ func (m *Manager) DumpGraph(g *graph.Graph) {
 	}
 }
 
-func (m *Manager) DumpResult(logs *ExecutionLog) {
-	logPath := path.Join(m.cfg.Global.LogPath, util.START_TIME)
+func (m *Manager) DumpResult(logs *ExecutionLog, startTime string) {
+	logPath := path.Join(m.cfg.Global.LogPath, startTime)
 	for i := 0; i < logs.thread; i++ {
 		logFile, err := os.Create(path.Join(logPath, fmt.Sprintf("thread-%d.log", i)))
 		if err != nil {
@@ -76,87 +76,74 @@ func (m *Manager) DumpResult(logs *ExecutionLog) {
 }
 
 type ExecutionLog struct {
-	thread    int
-	action    int
-	startTime [][]time.Time
-	endTime   [][]time.Time
-	tps       [][]graph.ActionTp
-	sqls      [][]string
-	status    [][]bool
-	errs      [][]error
+	thread int
+	action int
+	logs   [][]SQLLog
+}
+
+type SQLLog struct {
+	startTime time.Time
+	endTime   time.Time
+	tp        graph.ActionTp
+	sql       string
+	status    bool
+	err       error
 }
 
 func NewExecutionLog(thread, action int) *ExecutionLog {
 	e := ExecutionLog{
-		thread:    thread,
-		action:    action,
-		startTime: make([][]time.Time, thread),
-		endTime:   make([][]time.Time, thread),
-		tps:       make([][]graph.ActionTp, thread),
-		sqls:      make([][]string, thread),
-		status:    make([][]bool, thread),
-		errs:      make([][]error, thread),
-	}
-	for i := 0; i < thread; i++ {
-		e.startTime[i] = make([]time.Time, action)
-		e.endTime[i] = make([]time.Time, action)
-		e.tps[i] = make([]graph.ActionTp, action)
-		e.sqls[i] = make([]string, action)
-		e.status[i] = make([]bool, action)
-		e.errs[i] = make([]error, action)
+		thread: thread,
+		action: action,
+		logs:   make([][]SQLLog, action),
 	}
 	return &e
 }
 
-func (e *ExecutionLog) LogStart(tID, aID int, tp graph.ActionTp, sql string) {
-	e.startTime[tID][aID] = time.Now()
-	e.tps[tID][aID] = tp
-	e.sqls[tID][aID] = sql
+func (e *ExecutionLog) LogStart(tID int, tp graph.ActionTp, sql string) int {
+	e.logs[tID] = append(e.logs[tID], SQLLog{
+		startTime: time.Now(),
+		endTime:   EMPTY_TIME,
+		tp:        tp,
+		sql:       sql,
+		status:    false,
+		err:       nil,
+	})
+	return len(e.logs[tID]) - 1
 }
 
 func (e *ExecutionLog) LogSuccess(tID, aID int) {
-	e.endTime[tID][aID] = time.Now()
-	e.status[tID][aID] = true
+	e.logs[tID][aID].endTime = time.Now()
+	e.logs[tID][aID].status = true
 }
 
 func (e *ExecutionLog) LogFail(tID, aID int, err error) {
-	e.endTime[tID][aID] = time.Now()
-	e.status[tID][aID] = false
+	e.logs[tID][aID].endTime = time.Now()
+	e.logs[tID][aID].status = false
 	if err == nil {
 		panic("err should not be nil when log a failed stmt")
 	}
-	e.errs[tID][aID] = err
+	e.logs[tID][aID].err = err
 }
 
 func (e *ExecutionLog) LogN(n int) string {
 	var (
-		b         strings.Builder
-		startTime = e.startTime[n]
-		endTime   = e.endTime[n]
-		tps       = e.tps[n]
-		sqls      = e.sqls[n]
-		status    = e.status[n]
-		errs      = e.errs[n]
+		b    strings.Builder
+		logs = e.logs[n]
 	)
-	i := 0
-	for {
-		if i >= e.action || startTime[i] == EMPTY_TIME {
-			break
-		}
-		if status[i] {
+	for _, log := range logs {
+		if log.status {
 			fmt.Fprintf(&b, "[SUCCESS]")
 		} else {
-			if errs[i] != nil {
-				fmt.Fprintf(&b, "[FAILED %s]", errs[i].Error())
+			if log.err != nil {
+				fmt.Fprintf(&b, "[FAILED %s]", log.err.Error())
 			} else {
 				fmt.Fprintf(&b, "[UNFINISHED]")
 			}
 		}
-		fmt.Fprintf(&b, " [%s]", tps[i])
-		fmt.Fprintf(&b, " [%s-%s] ", startTime[i].Format(LOGTIME_FORMAT), endTime[i].Format(LOGTIME_FORMAT))
-		b.WriteString(sqls[i])
+		fmt.Fprintf(&b, " [%s]", log.tp)
+		fmt.Fprintf(&b, " [%s-%s] ", log.startTime.Format(LOGTIME_FORMAT), log.endTime.Format(LOGTIME_FORMAT))
+		b.WriteString(log.sql)
 		b.WriteString("\n")
-		i++
 	}
 	return b.String()
 }

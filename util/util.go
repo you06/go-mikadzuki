@@ -39,17 +39,17 @@ func RdMoment() time.Time {
 	return time.Unix(sec, 0)
 }
 
-func RdDate() string {
-	return RdMoment().Format("2006-01-02")
+func RdDate() time.Time {
+	return RdMoment()
 }
 
-func RdDateTime() string {
-	return RdMoment().Format("2006-01-02 15:04:05")
+func RdDateTime() time.Time {
+	return RdMoment()
 }
 
-func RdTimestamp() string {
+func RdTimestamp() time.Time {
 	sec := rand.Int63n(TS_DELTA) + TS_MIN
-	return time.Unix(sec, 0).Format("2006-01-02 15:04:05")
+	return time.Unix(sec, 0)
 }
 
 func RdName() string {
@@ -71,4 +71,8 @@ func RdHash() string {
 		hash[i] = rune(RdRange(0x61, 0x7a))
 	}
 	return string(hash)
+}
+
+func NowStr() string {
+	return time.Now().Format("2006-01-02_15:04:05")
 }

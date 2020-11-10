@@ -3,7 +3,7 @@ package graph
 import (
 	"fmt"
 	"strings"
-	"sync"
+	"sync/atomic"
 
 	"github.com/you06/go-mikadzuki/kv"
 )
@@ -18,6 +18,7 @@ type Action struct {
 	outs        []Depend
 	ins         []Depend
 	beforeWrite Depend
+	kvNext      *Depend
 	// key id, when it's -1, it means the key is not specified yet
 	kID int
 	// value id, can find out value from kv.Schema
@@ -26,9 +27,19 @@ type Action struct {
 	vID       int
 	knowValue bool
 	SQL       string
-	lock      *sync.RWMutex
-	ifExec    bool
-	ifReady   bool
+	// execution phase
+	// 0: not ready
+	// 1: ready to execute
+	// 2: executed but not returned
+	// 3: value returned, exec done, can set next action to ready state
+	phase int64
+	// anomaly fields
+	ExpectedErrorMsg string
+	abortOther       bool
+	abortSelf        bool
+	mayAbortSelf     bool
+	abortBlock       *Depend
+	cycle            *Cycle
 }
 
 type ActionTp string
@@ -60,6 +71,7 @@ var (
 	Insert          ActionTp = "Insert"
 	Update          ActionTp = "Update"
 	Delete          ActionTp = "Delete"
+	Replace         ActionTp = "Replace"
 	actionTps                = []ActionTp{
 		Begin,
 		Commit,
@@ -69,15 +81,17 @@ var (
 		Insert,
 		Update,
 		Delete,
+		Replace,
 	}
 )
 
+// for easy usage, here we use order as depend name, eg.
+// RW means Read and Write, same as Write after Read(WaR)
 var (
 	RW        DependTp = "RW"
 	WW        DependTp = "WW"
 	WR        DependTp = "WR"
 	RR        DependTp = "RR"
-	WRCommit  DependTp = "WRCommit"
 	Realtime  DependTp = "Realtime"
 	NotInit   DependTp = "NotInit"
 	dependTps          = []DependTp{
@@ -91,23 +105,25 @@ var (
 var (
 	Committed  Status = "Committed"
 	Rollbacked Status = "Rollbacked"
+	Abort      Status = "Abortted"
 )
 
 func NewAction(id, tID, xID int, tp ActionTp) Action {
 	return Action{
-		id:          id,
-		tID:         tID,
-		xID:         xID,
-		tp:          tp,
-		outs:        []Depend{},
-		ins:         []Depend{},
-		beforeWrite: INVALID_DEPEND,
-		knowValue:   false,
-		vID:         kv.INVALID_VALUE_ID,
-		SQL:         "",
-		lock:        &sync.RWMutex{},
-		ifExec:      false,
-		ifReady:     false,
+		id:           id,
+		tID:          tID,
+		xID:          xID,
+		tp:           tp,
+		outs:         []Depend{},
+		ins:          []Depend{},
+		beforeWrite:  INVALID_DEPEND,
+		knowValue:    false,
+		vID:          kv.INVALID_VALUE_ID,
+		SQL:          "",
+		phase:        0,
+		abortOther:   false,
+		abortSelf:    false,
+		mayAbortSelf: false,
 	}
 }
 
@@ -116,7 +132,11 @@ func (a ActionTp) IsRead() bool {
 }
 
 func (a ActionTp) IsWrite() bool {
-	return a == Insert || a == Update || a == Delete
+	return a == Insert || a == Update || a == Delete || a == Replace
+}
+
+func (a ActionTp) IsLock() bool {
+	return a.IsWrite() || a == SelectForUpdate
 }
 
 func (a ActionTp) IsTxnBegin() bool {
@@ -244,39 +264,51 @@ func DependTpFromActionTps(t1, t2 ActionTp) DependTp {
 	panic(fmt.Sprintf("unsuppert ActionTp %s, %s", t1, t2))
 }
 
-func (a *Action) SetExec(b bool) {
-	a.lock.Lock()
-	a.ifExec = b
-	a.lock.Unlock()
-}
-
-func (a *Action) GetExec() bool {
-	a.lock.RLock()
-	defer a.lock.RUnlock()
-	return a.ifExec
-}
-
-func (a *Action) SetReady(b bool) {
-	a.lock.Lock()
-	a.ifReady = b
-	a.lock.Unlock()
+func (a *Action) SetReady() {
+	atomic.StoreInt64(&a.phase, 1)
 }
 
 func (a *Action) GetReady() bool {
-	a.lock.RLock()
-	defer a.lock.RUnlock()
-	return a.ifReady
+	return atomic.LoadInt64(&a.phase) >= 1
+}
+
+func (a *Action) SetExec() {
+	atomic.StoreInt64(&a.phase, 2)
+}
+
+func (a *Action) GetExec() bool {
+	return atomic.LoadInt64(&a.phase) >= 2
+}
+
+func (a *Action) SetDone() {
+	atomic.StoreInt64(&a.phase, 3)
+}
+
+func (a *Action) GetDone() bool {
+	return atomic.LoadInt64(&a.phase) >= 3
 }
 
 func (a *Action) String() string {
 	var b strings.Builder
+	if a.mayAbortSelf {
+		b.WriteByte('*')
+	}
+	fmt.Fprintf(&b, "(%d)", a.id)
 	b.WriteString(string(a.tp))
 	fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
-	for _, d := range a.ins {
-		fmt.Fprintf(&b, "[%d, %d, %d]", d.tID, d.xID, d.aID)
+	if a.abortSelf {
+		fmt.Fprintf(&b, "[[%d, %d, %d]]", a.abortBlock.tID, a.abortBlock.xID, a.abortBlock.aID)
+	} else {
+		for _, d := range a.ins {
+			fmt.Fprintf(&b, "[%d, %d, %d]", d.tID, d.xID, d.aID)
+		}
 	}
 	for _, d := range a.outs {
-		fmt.Fprintf(&b, "{%d, %d, %d}", d.tID, d.xID, d.aID)
+		if a.abortOther {
+			fmt.Fprintf(&b, "{{%d, %d, %d}}", d.tID, d.xID, d.aID)
+		} else {
+			fmt.Fprintf(&b, "{%d, %d, %d}", d.tID, d.xID, d.aID)
+		}
 	}
 	return b.String()
 }

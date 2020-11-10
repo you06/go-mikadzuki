@@ -7,6 +7,7 @@ type Global struct {
 	Thread   int    `toml:"thread"`
 	Action   int    `toml:"action"`
 	LogPath  string `toml:"log-path"`
+	Anomaly  bool   `toml:"anomaly"`
 }
 
 func NewGlobal() Global {
@@ -17,5 +18,6 @@ func NewGlobal() Global {
 		Thread:   8,
 		Action:   20,
 		LogPath:  "",
+		Anomaly:  false,
 	}
 }

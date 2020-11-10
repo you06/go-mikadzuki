@@ -22,7 +22,7 @@ func (t *Timeline) String() string {
 	var b strings.Builder
 	for i, t := range t.txns {
 		if i != 0 {
-			b.WriteString(" -> ")
+			b.WriteString("\n")
 		}
 		b.WriteString(t.String())
 	}
@@ -32,8 +32,7 @@ func (t *Timeline) String() string {
 func (t *Timeline) NewTxnWithStatus(s Status) *Txn {
 	id := t.allocID
 	t.allocID += 1
-	txn := NewTxn(id, t.id, s)
-	t.txns = append(t.txns, txn)
+	t.txns = append(t.txns, NewTxn(id, t.id, s))
 	return &t.txns[id]
 }
 
@@ -42,4 +41,12 @@ func (t *Timeline) GetTxn(n int) *Txn {
 		return &t.txns[n]
 	}
 	return nil
+}
+
+func (t *Timeline) GetAction(xID, aID int) *Action {
+	txn := t.GetTxn(xID)
+	if txn == nil {
+		return nil
+	}
+	return txn.GetAction(aID)
 }

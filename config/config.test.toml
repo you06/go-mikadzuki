@@ -5,6 +5,7 @@ target = "tidb"
 thread = 4
 action = 10
 log-path = "./logs"
+anomaly = false
 
 [graph]
 begin = 2

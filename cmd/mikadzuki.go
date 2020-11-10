@@ -14,6 +14,7 @@ import (
 
 var (
 	cfgFile string
+	dryrun  bool
 )
 
 var mikadzukiCmd = &cobra.Command{
@@ -25,8 +26,11 @@ var mikadzukiCmd = &cobra.Command{
 		if err := cfg.Load(cfgFile); err != nil {
 			panic(err)
 		}
-		mgr := manager.NewManager(&cfg)
-		_, cancel := context.WithCancel(context.Background())
+		mgr := manager.NewManager(manager.Option{
+			Cfg:    &cfg,
+			Dryrun: dryrun,
+		})
+		ctx, cancel := context.WithCancel(context.Background())
 		go func() {
 			sc := make(chan os.Signal, 1)
 			signal.Notify(sc,
@@ -38,18 +42,15 @@ var mikadzukiCmd = &cobra.Command{
 
 			fmt.Printf("Got signal %d to exit.\n", <-sc)
 			cancel()
-			os.Exit(0)
 		}()
 		// mgr.Run(ctx)
-		fmt.Println(mgr.Once())
-
-		//
-		//generator := graph.NewGenerator(&manager, &cfg.Global, &cfg.Graph, &cfg.Depend)
-		//graph := generator.NewGraph(8, 14)
-		//fmt.Println(graph.String())
+		if err := mgr.Once(ctx); err != nil {
+			fmt.Println(err)
+		}
 	},
 }
 
 func init() {
 	mikadzukiCmd.Flags().StringVar(&cfgFile, "config", "config.toml", "config file")
+	mikadzukiCmd.Flags().BoolVar(&dryrun, "dryrun", false, "dry run mode will generate graph only")
 }
