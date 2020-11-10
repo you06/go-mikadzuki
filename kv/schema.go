@@ -299,16 +299,18 @@ func (s *Schema) UpdateValue(newID, oldID int) {
 	}
 	var value []interface{}
 	var oldValue []interface{}
+	oldPrimaryKey := make([]string, len(s.Primary))
+	oldUniqueKeys := make([][]string, len(s.Unique))
 	primaryKey := make([]string, len(s.Primary))
 	uniqueKeys := make([][]string, len(s.Unique))
 
 	// delete old index, so that it won't conflict with itself
 	if oldID != NULL_VALUE_ID {
 		oldValue = s.Data[oldID]
-		s.MakePrimaryKey(oldValue, &primaryKey)
-		s.MakeUniqueKey(oldValue, &uniqueKeys)
-		s.DelPrimaryKey(primaryKey)
-		s.DelUniqueKeys(uniqueKeys)
+		s.MakePrimaryKey(oldValue, &oldPrimaryKey)
+		s.MakeUniqueKey(oldValue, &oldUniqueKeys)
+		s.DelPrimaryKey(oldPrimaryKey)
+		s.DelUniqueKeys(oldUniqueKeys)
 	}
 	for {
 		value = s.MakeValue()
@@ -325,6 +327,10 @@ func (s *Schema) UpdateValue(newID, oldID int) {
 		// add new index
 		s.AddPrimaryKey(primaryKey)
 		s.AddUniqueKeys(uniqueKeys)
+		if oldID != NULL_VALUE_ID {
+			s.AddPrimaryKey(oldPrimaryKey)
+			s.AddUniqueKeys(oldUniqueKeys)
+		}
 		break
 	}
 	// check if index valid
@@ -415,7 +421,7 @@ func (s *Schema) SelectForUpdateSQL(id int) string {
 }
 
 func (s *Schema) UpdateSQL(oldID, newID int) string {
-	if oldID == -1 {
+	if oldID == NULL_VALUE_ID {
 		return s.ReplaceSQL(newID)
 	}
 	oldData, newData := s.Data[oldID], s.Data[newID]

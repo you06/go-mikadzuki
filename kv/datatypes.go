@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math/rand"
 	"strconv"
+	"time"
 
 	"github.com/you06/go-mikadzuki/util"
 )
@@ -130,7 +131,9 @@ func (d DataType) ToHashString(data interface{}) string {
 	switch d {
 	case TinyInt, Int, BigInt:
 		return strconv.Itoa(data.(int))
-	case Date, Datetime, Timestamp, Char, Varchar, Text:
+	case Date, Datetime, Timestamp:
+		return data.(time.Time).Format("2006-01-02")
+	case Char, Varchar, Text:
 		return data.(string)
 	default:
 		panic(fmt.Sprintf("unimplement type %s", d))
@@ -146,7 +149,9 @@ func (d DataType) ValToString(data interface{}) string {
 	switch d {
 	case TinyInt, Int, BigInt:
 		return strconv.Itoa(data.(int))
-	case Date, Datetime, Timestamp, Char, Varchar, Text:
+	case Date, Datetime, Timestamp:
+		return fmt.Sprintf(`"%s"`, data.(time.Time).Format("2006-01-02"))
+	case Char, Varchar, Text:
 		return fmt.Sprintf(`"%s"`, data.(string))
 	default:
 		panic(fmt.Sprintf("unimplement type %s", d))

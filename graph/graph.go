@@ -153,6 +153,10 @@ func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
 		if txn == nil {
 			return
 		}
+		for dependTp == WR && !txn.CanStartIn(before.tID, before.xID) {
+			tp = g.randActionTp()
+			dependTp = DependTpFromActionTps(before.tp, tp)
+		}
 		for j := 0; j < MAX_RETRY; j++ {
 			if txn.abortByErr {
 				t2, txn = g.RandTxnWithXID(x2)
@@ -163,6 +167,7 @@ func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
 				return
 			}
 		}
+
 		if ok, path = g.IfCycle(t1, x1, t2, x2, dependTp); !ok {
 			break
 		} else if g.cfg.Global.Anomaly {
@@ -189,12 +194,14 @@ func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
 	if tp.IsRead() && action.vID == -1 {
 		ifCycle = false
 	}
-	action.ins = append(action.ins, Depend{
-		tID: t1,
-		xID: x1,
-		aID: before.id,
-		tp:  dependTp,
-	})
+	if !ifCycle {
+		action.ins = append(action.ins, Depend{
+			tID: t1,
+			xID: x1,
+			aID: before.id,
+			tp:  dependTp,
+		})
+	}
 	before.outs = append(before.outs, Depend{
 		tID: t2,
 		xID: x2,
@@ -299,11 +306,13 @@ OUTER:
 		}
 	}
 
+	beforeID := before.id
 	lockAction := g.InsertBefore(before.tID, before.xID, 0, Insert)
 	lockAction.kID = lockKV.ID
 	lockAction.vID = beforeVID
 	lockAction.SQL = beforeSQL
 
+	before = g.GetAction(before.tID, before.xID, beforeID+1)
 	action.kID = lockKV.ID
 	action.vID = lockKV.Latest
 	action.SQL = afterSQL
@@ -315,14 +324,21 @@ OUTER:
 		aID: before.id,
 		tp:  WW,
 	}
-	action.cycle = g.MakeCycle(short)
+	var blockPoint map[int]int
+	action.cycle, blockPoint = g.MakeCycle(short)
 	action.cycle.Add(LocationFromAction(action))
+	g.ConnectAction(before.tID, before.xID, blockPoint[before.tID], action.tID, action.xID, action.id, WW)
 	fmt.Println("cycle done:", action.cycle.String())
 }
 
-func (g *Graph) MakeCycle(short [][2]int) *Cycle {
+func (g *Graph) MakeCycle(short [][2]int) (*Cycle, map[int]int) {
 	cycle := EmptyCycle(g)
 	blockPoint := make(map[int]int)
+
+	for _, item := range short {
+		txn := g.GetTxn(item[0], item[1])
+		txn.AddNoStartIns(short)
+	}
 	for i := 0; i < len(short)-1; i++ {
 		beforeTID := short[i][0]
 		beforeXID := short[i][1]
@@ -332,6 +348,37 @@ func (g *Graph) MakeCycle(short [][2]int) *Cycle {
 		afterTxn := g.GetTxn(afterTID, afterXID)
 		util.AssertNotNil(beforeTxn)
 		util.AssertNotNil(afterTxn)
+
+		inShort := func(tID, xID int) bool {
+			for _, item := range short {
+				if tID == item[0] && xID == item[1] {
+					return true
+				}
+			}
+			return false
+		}
+
+		var ins []Depend
+		for _, in := range afterTxn.startIns {
+			if !inShort(in.tID, in.xID) {
+				ins = append(ins, in)
+				continue
+			}
+			for j := 0; j < afterTxn.allocID; j++ {
+				action := afterTxn.GetAction(j)
+				if !action.tp.IsRead() {
+					continue
+				}
+				if action.beforeWrite == INVALID_DEPEND {
+					continue
+				}
+				for inShort(action.beforeWrite.tID, action.beforeWrite.xID) {
+					before := g.GetAction(action.beforeWrite.tID, action.beforeWrite.xID, action.beforeWrite.aID)
+					action.beforeWrite = before.beforeWrite
+				}
+			}
+		}
+		afterTxn.startIns = ins
 
 		for j := 0; j < beforeTxn.allocID; j++ {
 			beforeAction := beforeTxn.GetAction(j)
@@ -349,7 +396,6 @@ func (g *Graph) MakeCycle(short [][2]int) *Cycle {
 				continue
 			}
 			afterAction := afterTxn.GetAction(depend.aID)
-			fmt.Println(afterAction.tID, afterAction.xID, afterAction.id)
 			if aID, ok := blockPoint[beforeTID]; ok && aID < beforeAction.id {
 				// add new helper dependency
 				// w(x, 1)
@@ -377,7 +423,7 @@ func (g *Graph) MakeCycle(short [][2]int) *Cycle {
 				helperTo.SQL = afterSQL
 				blockPoint[beforeTID] = aID + 1
 				afterAction = helperTo
-				g.ConnectAction(beforeTID, beforeXID, aID, afterTID, afterXID, afterAction.id, WW)
+				g.ConnectAction(beforeTID, beforeXID, aID+1, afterTID, afterXID, afterAction.id, WW)
 
 				// There is a harder way, we can chagne the dependency for same key, eg.
 				// w(x, 1)
@@ -415,7 +461,7 @@ func (g *Graph) MakeCycle(short [][2]int) *Cycle {
 			break
 		}
 	}
-	return &cycle
+	return &cycle, blockPoint
 }
 
 func (g *Graph) Select2SelectForUpdate(action *Action) {
@@ -550,7 +596,9 @@ func (g *Graph) Abort(tID, xID int) {
 			}
 			next.beforeWrite = overwrite
 			action = next
-			g.AssignPair(pair, action)
+			if action.tp.IsRead() {
+				g.AssignPair(pair, action)
+			}
 		}
 	}
 }
@@ -572,6 +620,7 @@ func (g *Graph) AssignPair(pair *kv.KV, action *Action) {
 			action.SQL = pair.GetValueNoTxnForUpdateWithID(g.schema, beforeVID)
 		}
 		action.vID = beforeVID
+		return
 	case Insert:
 		if pair.Latest == kv.NULL_VALUE_ID {
 			action.SQL = pair.NewValueNoTxn(g.schema)
@@ -840,7 +889,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 					control.RLock()
 					action = txn.GetAction(k)
 					control.RUnlock()
-					if !action.abortSelf {
+					if action.abortBlock == nil {
 						// lock dependency
 						if action.tp.IsLock() {
 							for _, depend := range action.ins {
@@ -850,7 +899,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 									for !before.GetExec() {
 										t += 1
 										if t%1000 == 0 {
-											fmt.Println("wait fot lock dependency", action.tID, action.xID, action.id, action.abortSelf, before.tID, before.xID, before.id, before.abortSelf)
+											fmt.Println("wait fot lock dependency", action.tID, action.xID, action.id, action.mayAbortSelf, before.tID, before.xID, before.id, before.mayAbortSelf)
 										}
 										time.Sleep(WAIT_TIME)
 									}
@@ -864,7 +913,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 							for !before.GetExec() {
 								t += 1
 								if t%1000 == 0 {
-									fmt.Println("wait for ww", action.tID, action.xID, action.id, action.abortSelf, before.tID, before.xID, before.id, before.abortSelf)
+									fmt.Println("wait for ww", action.tID, action.xID, action.id, action.mayAbortSelf, before.tID, before.xID, before.id, before.mayAbortSelf)
 								}
 								time.Sleep(WAIT_TIME)
 							}
@@ -878,7 +927,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 						for !before.GetExec() {
 							t += 1
 							if t%1000 == 0 {
-								fmt.Println("wait for locks", action.tID, action.xID, action.id, action.abortSelf, before.tID, before.xID, before.id, before.abortSelf)
+								fmt.Println("wait for locks", action.tID, action.xID, action.id, action.mayAbortSelf, before.tID, before.xID, before.id, before.mayAbortSelf)
 							}
 							time.Sleep(WAIT_TIME)
 						}
@@ -899,19 +948,24 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 					}()
 					rows, _, err = exec(i, action.tp, action.SQL)
 					execDone <- struct{}{}
+					txnMutex.Lock()
 					action.SetExec()
 					action.SetDone()
 					// end this transaction
 					if action.mayAbortSelf {
-						if err == nil && action.cycle.GetDone() && !action.cycle.GetErr() {
+						if err == nil && action.cycle.GetDone() && !action.cycle.GetErr() && !action.cycle.IfAbort() {
 							errCh <- errors.Errorf("expect error: %s but got nil\ncycle: %s", DEADLOCK_ERROR_MESSAGE, action.cycle)
 							return
-						}
-						if err != nil && strings.Contains(err.Error(), DEADLOCK_ERROR_MESSAGE) {
+						} else if err != nil && strings.Contains(err.Error(), DEADLOCK_ERROR_MESSAGE) {
 							action.cycle.SetErr()
 							action.cycle.SetDone()
+							txnMutex.Unlock()
 							g.Abort(txn.tID, txn.id)
 							txn.SetEnd(true)
+							for ; k < txn.allocID; k++ {
+								action := txn.GetAction(k)
+								action.SetDone()
+							}
 							if next := timeline.GetTxn(j + 1); next != nil {
 								next.SetReady(true)
 							}
@@ -921,6 +975,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 						errCh <- err
 						return
 					}
+					txnMutex.Unlock()
 					switch action.tp {
 					case Select:
 						if same, err := g.schema.CompareData(action.vID, rows); !same {

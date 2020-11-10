@@ -57,7 +57,13 @@ func (k *KV) Begin() *Txn {
 }
 
 func (k *KV) GetValueNoTxn(s *Schema) string {
-	return s.SelectSQL(k.Latest)
+	var id int
+	if k.Latest == NULL_VALUE_ID && k.DeleteVal != INVALID_VALUE_ID {
+		id = k.DeleteVal
+	} else {
+		id = k.Latest
+	}
+	return s.SelectSQL(id)
 }
 
 func (k *KV) GetValueNoTxnWithID(s *Schema, vID int) string {
@@ -82,7 +88,12 @@ func (k *KV) NewValueNoTxn(s *Schema) string {
 
 func (k *KV) PutValueNoTxn(s *Schema) string {
 	oldID := k.Latest
-	newID := s.PutValue(k.ID, oldID)
+	var newID int
+	if k.Latest == NULL_VALUE_ID && k.DeleteVal != INVALID_VALUE_ID {
+		newID = s.PutValue(k.ID, k.DeleteVal)
+	} else {
+		newID = s.PutValue(k.ID, k.Latest)
+	}
 	k.Latest = newID
 	k.DeleteVal = INVALID_VALUE_ID
 	return s.UpdateSQL(oldID, newID)

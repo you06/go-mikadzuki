@@ -18,6 +18,7 @@ type Txn struct {
 	status     Status
 	startOuts  []Depend
 	startIns   []Depend
+	noStartIns map[Depend]struct{}
 	endIns     []Depend
 	endOuts    []Depend
 	ifStart    bool
@@ -29,16 +30,17 @@ type Txn struct {
 
 func NewTxn(id, tID int, s Status) Txn {
 	return Txn{
-		id:        id,
-		tID:       tID,
-		allocID:   0,
-		actions:   []Action{},
-		status:    s,
-		startOuts: []Depend{},
-		startIns:  []Depend{},
-		endIns:    []Depend{},
-		endOuts:   []Depend{},
-		lockSQLs:  []string{},
+		id:         id,
+		tID:        tID,
+		allocID:    0,
+		actions:    []Action{},
+		status:     s,
+		startOuts:  []Depend{},
+		startIns:   []Depend{},
+		noStartIns: make(map[Depend]struct{}),
+		endIns:     []Depend{},
+		endOuts:    []Depend{},
+		lockSQLs:   []string{},
 	}
 }
 
@@ -138,6 +140,17 @@ func (t *Txn) EndSQL() string {
 	default:
 		panic(fmt.Sprintf("unsupport txn status %s", t.status))
 	}
+}
+
+func (t *Txn) AddNoStartIns(path [][2]int) {
+	for _, d := range path {
+		t.noStartIns[Depend{tID: d[0], xID: d[1]}] = struct{}{}
+	}
+}
+
+func (t *Txn) CanStartIn(tID, xID int) bool {
+	_, ok := t.noStartIns[Depend{tID: tID, xID: xID}]
+	return !ok
 }
 
 type Location struct {
