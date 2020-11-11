@@ -131,8 +131,10 @@ func (d DataType) ToHashString(data interface{}) string {
 	switch d {
 	case TinyInt, Int, BigInt:
 		return strconv.Itoa(data.(int))
-	case Date, Datetime, Timestamp:
+	case Date:
 		return data.(time.Time).Format("2006-01-02")
+	case Datetime, Timestamp:
+		return data.(time.Time).Format("2006-01-02 15:04:05")
 	case Char, Varchar, Text:
 		return data.(string)
 	default:
