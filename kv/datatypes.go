@@ -9,6 +9,11 @@ import (
 	"github.com/you06/go-mikadzuki/util"
 )
 
+const (
+	DATE_FORMAT     = "2006-01-02"
+	DATETIME_FORMAT = "2006-01-02 15:04:05"
+)
+
 type DataType int
 
 type Null struct{}
@@ -151,8 +156,10 @@ func (d DataType) ValToString(data interface{}) string {
 	switch d {
 	case TinyInt, Int, BigInt:
 		return strconv.Itoa(data.(int))
-	case Date, Datetime, Timestamp:
-		return fmt.Sprintf(`"%s"`, data.(time.Time).Format("2006-01-02"))
+	case Date:
+		return fmt.Sprintf(`"%s"`, data.(time.Time).Format(DATE_FORMAT))
+	case Datetime, Timestamp:
+		return fmt.Sprintf(`"%s"`, data.(time.Time).Format(DATETIME_FORMAT))
 	case Char, Varchar, Text:
 		return fmt.Sprintf(`"%s"`, data.(string))
 	default:
@@ -169,7 +176,11 @@ func (d DataType) ValToPureString(data interface{}) string {
 	switch d {
 	case TinyInt, Int, BigInt:
 		return strconv.Itoa(data.(int))
-	case Date, Datetime, Timestamp, Char, Varchar, Text:
+	case Date:
+		return data.(time.Time).Format(DATE_FORMAT)
+	case Datetime, Timestamp:
+		return data.(time.Time).Format(DATETIME_FORMAT)
+	case Char, Varchar, Text:
 		return data.(string)
 	default:
 		panic(fmt.Sprintf("unimplement type %s", d))
