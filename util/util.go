@@ -12,7 +12,7 @@ var (
 	TIME_MAX   = time.Date(9999, 12, 31, 23, 59, 59, 0, time.UTC).Unix()
 	TIME_DELTA = TIME_MAX - TIME_MIN
 	TS_MIN     = time.Date(1970, 1, 1, 0, 0, 1, 0, time.UTC).Unix()
-	TS_MAX     = time.Date(2038, 1, 19, 3, 14, 7, 0, time.UTC).Unix()
+	TS_MAX     = time.Date(2038, 1, 18, 3, 14, 7, 0, time.UTC).Unix()
 	TS_DELTA   = TS_MAX - TS_MIN
 	HASH_LEN   = 10
 	START_TIME = time.Now().Format("2006-01-02_15:04:05")
