@@ -38,7 +38,8 @@ type Action struct {
 	abortOther       bool
 	abortSelf        bool
 	mayAbortSelf     bool
-	abortBlock       *Depend
+	abortBlocks      []Depend
+	abortBlocker     *Depend
 	cycle            *Cycle
 }
 
@@ -124,6 +125,7 @@ func NewAction(id, tID, xID int, tp ActionTp) Action {
 		abortOther:   false,
 		abortSelf:    false,
 		mayAbortSelf: false,
+		abortBlocks:  []Depend{},
 	}
 }
 
@@ -297,7 +299,7 @@ func (a *Action) String() string {
 	b.WriteString(string(a.tp))
 	fmt.Fprintf(&b, "(%d, %d)", a.kID, a.vID)
 	if a.abortSelf {
-		fmt.Fprintf(&b, "[[%d, %d, %d]]", a.abortBlock.tID, a.abortBlock.xID, a.abortBlock.aID)
+		fmt.Fprintf(&b, "[[%d, %d, %d]]", a.abortBlocker.tID, a.abortBlocker.xID, a.abortBlocker.aID)
 	} else {
 		for _, d := range a.ins {
 			fmt.Fprintf(&b, "[%d, %d, %d]", d.tID, d.xID, d.aID)

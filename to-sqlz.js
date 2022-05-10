@@ -1,9 +1,13 @@
 const fs = require('fs')
 const path = require('path')
 
-const dir = './logs/2020-11-06_14:33:12'
-
 function main() {
+    const dir = process.argv[2]
+    if (!dir) {
+        console.log('invalid given directory')
+        return
+    }
+
     const logs = fs.readdirSync(dir)
     const ordered = []
     for (const log of logs) {
@@ -15,7 +19,7 @@ function main() {
         const thread = s.join('.').split('-').join('_')
         const content = fs.readFileSync(path.join(dir, log), { encoding: 'utf-8' })
         for (const line of content.split('\n')) {
-            let match = /^\[[A-Z]+\] \[[a-zA-Z]+\] \[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{5})-(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{5})\] (.*)$/.exec(line)
+            let match = /^\[.*\] \[[a-zA-Z]+\] \[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{5})-(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}.\d{5})\] (.*)$/.exec(line)
             if (!match) continue
             let startTime = match[1]
             let sql = match[3]

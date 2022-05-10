@@ -95,6 +95,18 @@ func (t *Txn) GetReady() bool {
 	return t.ifReady
 }
 
+func (t *Txn) SetAbortByErr(r bool) {
+	t.Lock()
+	t.abortByErr = r
+	t.Unlock()
+}
+
+func (t *Txn) GetAbortByErr() bool {
+	t.RLock()
+	defer t.RUnlock()
+	return t.abortByErr
+}
+
 func (t *Txn) String() string {
 	var b strings.Builder
 	b.WriteString("Begin")
@@ -202,7 +214,7 @@ func EmptyCycle(g *Graph) Cycle {
 func (c *Cycle) IfAbort() bool {
 	for location := range c.locations {
 		txn := c.graph.GetTxn(location.tID, location.xID)
-		if txn.abortByErr {
+		if txn.GetAbortByErr() {
 			return true
 		}
 	}

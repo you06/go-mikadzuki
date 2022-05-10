@@ -127,11 +127,11 @@ func (g *Graph) NewKV(t int) {
 	txn := g.GetTimeline(t).GetTxn(0)
 	action := txn.NewActionWithTp(Insert)
 	g.AssignPair(pair, action)
-	g.Next(t, 0, 1, pair, action, 0)
+	g.Next(t, 0, 1, pair, action, make(map[int]struct{}), 0)
 }
 
 // Next tries finding no cycle next dependent txn recursively
-func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
+func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, walkedMap map[int]struct{}, depth int) {
 	var (
 		tp       ActionTp
 		dependTp DependTp
@@ -150,6 +150,13 @@ func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
 			dependTp = DependTpFromActionTps(before.tp, tp)
 		}
 		t2, txn = g.RandTxnWithXID(x2)
+		for {
+			if _, ok := walkedMap[t2]; !ok {
+				break
+			}
+			t2, txn = g.RandTxnWithXID(x2)
+		}
+		walkedMap[t2] = struct{}{}
 		if txn == nil {
 			return
 		}
@@ -228,13 +235,21 @@ func (g *Graph) Next(t1, x1, x2 int, pair *kv.KV, before *Action, depth int) {
 	if ifCycle {
 		fmt.Println("cycle:", short)
 		g.Anomaly(before, action, short)
+		pair = g.schema.GetKV(action.kID)
 	} else {
 		g.ConnectTxn(t1, x1, t2, x2, dependTp)
 		g.AssignPair(pair, action)
 	}
 
 	if util.RdBoolRatio(0.7 * float64(g.GetTimeline(t2).allocID) / float64(depth)) {
-		g.Next(t2, x2, x2+util.RdRange(0, 2), pair, action, depth+1)
+		forward := util.RdRange(0, 2)
+		if len(walkedMap) == g.allocID {
+			forward = 1
+		}
+		if forward == 1 {
+			walkedMap = make(map[int]struct{})
+		}
+		g.Next(t2, x2, x2+forward, pair, action, walkedMap, depth+1)
 	}
 	// if action.tp.IsWrite() && util.RdBoolRatio(2/float64(20+depth)) {
 	// 	g.NextSplit(t2, x2, action, depth+1)
@@ -318,12 +333,18 @@ OUTER:
 	action.SQL = afterSQL
 	action.tp = Update
 	action.mayAbortSelf = true
-	action.abortBlock = &Depend{
+	action.abortBlocker = &Depend{
 		tID: before.tID,
 		xID: before.xID,
 		aID: before.id,
 		tp:  WW,
 	}
+	before.abortBlocks = append(before.abortBlocks, Depend{
+		tID: action.tID,
+		xID: action.xID,
+		aID: action.id,
+		tp:  WW,
+	})
 	var blockPoint map[int]int
 	action.cycle, blockPoint = g.MakeCycle(short)
 	action.cycle.Add(LocationFromAction(action))
@@ -512,6 +533,8 @@ func (g *Graph) MoveBefore(tID, xID, a1, a2 int) {
 	txn.actions[a1] = action
 	inMap := make(map[Location]struct{})
 	outMap := make(map[Location]struct{})
+	blockerMap := make(map[Location]struct{})
+	blocksMap := make(map[Location]struct{})
 	for i := a1; i <= a2; i++ {
 		action := txn.GetAction(i)
 
@@ -520,6 +543,7 @@ func (g *Graph) MoveBefore(tID, xID, a1, a2 int) {
 			if _, ok := inMap[location]; ok {
 				continue
 			}
+			inMap[location] = struct{}{}
 			before := g.GetAction(depend.tID, depend.xID, depend.aID)
 			for i, out := range before.outs {
 				if out.tID == tID && out.xID == xID &&
@@ -540,13 +564,13 @@ func (g *Graph) MoveBefore(tID, xID, a1, a2 int) {
 					before.kvNext.aID += 1
 				}
 			}
-			inMap[location] = struct{}{}
 		}
 		for _, depend := range action.outs {
 			location := LocationFromDepend(&depend)
 			if _, ok := outMap[location]; ok {
 				continue
 			}
+			outMap[location] = struct{}{}
 			after := g.GetAction(depend.tID, depend.xID, depend.aID)
 			for i, in := range after.ins {
 				if in.tID == tID && in.xID == xID &&
@@ -558,7 +582,40 @@ func (g *Graph) MoveBefore(tID, xID, a1, a2 int) {
 					}
 				}
 			}
-			outMap[location] = struct{}{}
+		}
+		if action.abortBlocker != nil {
+			location := LocationFromDepend(action.abortBlocker)
+			_, ok := blockerMap[location]
+			if !ok {
+				blockerMap[location] = struct{}{}
+				before := g.GetAction(action.abortBlocker.tID, action.abortBlocker.xID, action.abortBlocker.aID)
+				for i, block := range before.abortBlocks {
+					if block.tID == tID && block.xID == xID &&
+						block.aID >= a1 && block.aID <= a2 {
+						if block.aID == a2 {
+							before.abortBlocks[i].aID = a1
+						} else {
+							before.abortBlocks[i].aID += 1
+						}
+					}
+				}
+			}
+		}
+		for _, out := range action.abortBlocks {
+			location := LocationFromDepend(&out)
+			if _, ok := blocksMap[location]; ok {
+				continue
+			}
+			blocksMap[location] = struct{}{}
+			block := g.GetAction(out.tID, out.xID, out.aID)
+			if block.abortBlocker.tID == tID && block.abortBlocker.xID == xID &&
+				block.abortBlocker.aID >= a1 && block.abortBlocker.aID <= a2 {
+				if block.abortBlocker.aID == a2 {
+					block.abortBlocker.aID = a1
+				} else {
+					block.abortBlocker.aID += 1
+				}
+			}
 		}
 	}
 }
@@ -889,7 +946,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 					control.RLock()
 					action = txn.GetAction(k)
 					control.RUnlock()
-					if action.abortBlock == nil {
+					if action.abortBlocker == nil {
 						// lock dependency
 						if action.tp.IsLock() {
 							for _, depend := range action.ins {
@@ -899,7 +956,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 									for !before.GetExec() {
 										t += 1
 										if t%1000 == 0 {
-											fmt.Println("wait fot lock dependency", action.tID, action.xID, action.id, action.mayAbortSelf, before.tID, before.xID, before.id, before.mayAbortSelf)
+											fmt.Println("wait for lock dependency", action.tID, action.xID, action.id, action.mayAbortSelf, before.tID, before.xID, before.id, before.mayAbortSelf)
 										}
 										time.Sleep(WAIT_TIME)
 									}
@@ -920,9 +977,9 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 						}
 					} else {
 						// wait for lock dependency
-						before := g.GetTimeline(action.abortBlock.tID).
-							GetTxn(action.abortBlock.xID).
-							GetAction(action.abortBlock.aID)
+						before := g.GetTimeline(action.abortBlocker.tID).
+							GetTxn(action.abortBlocker.xID).
+							GetAction(action.abortBlocker.aID)
 						t := 1
 						for !before.GetExec() {
 							t += 1
@@ -962,6 +1019,7 @@ func (g *Graph) IterateGraph(exec func(int, ActionTp, string) (*sql.Rows, *sql.R
 							txnMutex.Unlock()
 							g.Abort(txn.tID, txn.id)
 							txn.SetEnd(true)
+							txn.SetAbortByErr(true)
 							for ; k < txn.allocID; k++ {
 								action := txn.GetAction(k)
 								action.SetDone()
